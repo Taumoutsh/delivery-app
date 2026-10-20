@@ -108,6 +108,10 @@ delivery_app/
 data/delivery.db          base SQLite (créée au premier lancement, images incluses en BLOB)
 tools/build_pyz.py        produit dist/checklist-livraison.pyz : toute l'app en un seul fichier
 tools/build_demo.py       génère demo.html autonome (mock-api.js à la place d'api.js)
+tools/build_release.py    assets de release dans dist/ (.pyz, .zip + INSTALLATION.md, SHA256SUMS.txt)
+tools/snapshot_schema.py  fige une base d'exemple de la version de schéma courante (tests/fixtures)
+.github/workflows/release.yml  sur tag vX.Y.Z : tests Python 3.8/3.12 puis release GitHub
+CHANGELOG.md              notes de chaque version (source des notes de release)
 tests/test_app.py         tests d'API bout en bout (python -m unittest discover tests)
 ```
 
@@ -236,5 +240,8 @@ description et commandes **résolues**, tableau de liens, commentaires horodaté
 - **v1.1 (2026-10-20)** — Tableaux de liens pour Word par tâche (E13). Suppression de toutes les
   dépendances (E14) : générateurs PDF et .docx maison, polices embarquées, `launch.py`, archive
   `.pyz` unique, migration de schéma v2. Les GIF/WebP sont convertis en PNG par le navigateur.
+- Version de l'application : `delivery_app.__version__` (doit correspondre au tag `vX.Y.Z` et à une
+  section de `CHANGELOG.md`, vérifié par le workflow de release).
+
 - **v1.2 (2026-10-20)** — Compatibilité des bases : migrations transactionnelles, sauvegarde
   automatique avant migration, refus d'une base plus récente, fixtures v1/v2 et tests de compatibilité.

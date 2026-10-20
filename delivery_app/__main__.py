@@ -9,6 +9,7 @@ import threading
 import webbrowser
 from pathlib import Path
 
+from . import __version__
 from .db import Database, SchemaTooNew
 from .server import make_server
 
@@ -36,6 +37,7 @@ def main():
     parser.add_argument("--data", default=os.environ.get("DELIVERY_DATA", str(DEFAULT_DATA)),
                         help="dossier contenant la base SQLite (défaut : ./data)")
     parser.add_argument("--open", action="store_true", help="ouvrir le navigateur au démarrage")
+    parser.add_argument("--version", action="version", version=f"Checklist Livraison {__version__}")
     args = parser.parse_args()
 
     data_dir = Path(args.data).expanduser().resolve()
@@ -51,7 +53,7 @@ def main():
     except OSError as exc:
         raise SystemExit(f"Impossible d'écouter sur le port {args.port} ({exc}). Essayez --port 8766.")
     url = f"http://{'localhost' if args.host in ('127.0.0.1', '0.0.0.0') else args.host}:{args.port}/"
-    print(f"Checklist de livraison : {url}")
+    print(f"Checklist de livraison {__version__} : {url}")
     print(f"Base de données        : {data_dir / 'delivery.db'}")
     print("Ctrl+C pour arrêter.", flush=True)
     if args.open:

@@ -27,6 +27,13 @@ python tools/build_pyz.py         # → dist/checklist-livraison.pyz (~170 Ko)
 
 Copiez ce seul fichier dans l'environnement cible et lancez-le avec `python`.
 
+## Publier une version
+
+1. Mettre à jour `__version__` dans `delivery_app/__init__.py` et ajouter la section dans `CHANGELOG.md`.
+2. `python tools/build_release.py` : tests + `dist/` (`.pyz`, `.zip` avec guide d'installation, `SHA256SUMS.txt`).
+3. `git tag v1.2.0 && git push origin v1.2.0` : le workflow `.github/workflows/release.yml` teste sous
+   Python 3.8 et 3.12 puis publie la release GitHub avec ces fichiers.
+
 ## Développer
 
 - Spécifications et décisions : [SPECS.md](SPECS.md)

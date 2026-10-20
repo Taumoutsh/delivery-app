@@ -10,7 +10,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, unquote, urlparse
 
-from . import report
+from . import __version__, report
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_UPLOAD = 15 * 1024 * 1024
@@ -182,7 +182,7 @@ def delete_image(h, image_id):
 
 class Handler(BaseHTTPRequestHandler):
     db = None  # injected by make_server
-    server_version = "DeliveryChecklist/1.0"
+    server_version = f"DeliveryChecklist/{__version__}"
 
     def log_message(self, fmt, *args):
         if "/api/" in (args[0] if args else ""):

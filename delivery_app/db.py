@@ -166,7 +166,11 @@ class Database:
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.backup_path = None
-        self._migrate()
+        try:
+            self._migrate()
+        except Exception:
+            self.conn.close()
+            raise
 
     # -- infrastructure -------------------------------------------------
 

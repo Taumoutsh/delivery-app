@@ -37,6 +37,7 @@ class ApiTest(unittest.TestCase):
         cls.db = Database(Path(cls.tmp.name) / "test.db")
         cls.server = make_server(cls.db, "127.0.0.1", 0)
         cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"
+        cls.server.RequestHandlerClass.log_message = lambda *args: None
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
 
     @classmethod
