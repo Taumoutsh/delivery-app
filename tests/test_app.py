@@ -17,8 +17,11 @@ import zipfile
 import zlib
 from pathlib import Path
 
-from delivery_app import pdf_writer
-from delivery_app.db import Database
+from unittest import mock
+
+from delivery_app import db as dbmod
+from delivery_app import pdf_writer, report
+from delivery_app.db import Database, SchemaTooNew
 from delivery_app.server import make_server
 from delivery_app.templating import build_variables, parse_table, render_command
 
@@ -216,35 +219,103 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(variables["date"], "2026-01-02")
 
 
-class MigrationTest(unittest.TestCase):
-    def test_v1_database_gets_table_spec(self):
+FIXTURES = Path(__file__).parent / "fixtures"
+TABLES = ("settings", "template_tasks", "deliveries", "delivery_tasks", "comments", "images")
+
+
+def load_fixture(version, directory):
+    path = Path(directory) / f"v{version}.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript((FIXTURES / f"schema_v{version}.sql").read_text(encoding="utf-8"))
+    conn.close()
+    return path
+
+
+def schema_of(conn):
+    """Columns and indexes per table, to compare a migrated database with a fresh one."""
+    out = {}
+    for (table,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
+        cols = sorted((r[1], r[2].upper(), r[3], r[4], r[5]) for r in conn.execute(f"PRAGMA table_info({table})"))
+        out[table] = cols
+    out["_indexes"] = sorted(r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"))
+    return out
+
+
+class CompatibilityTest(unittest.TestCase):
+    """Every frozen schema version (tests/fixtures) must open, upgrade and work with the current app."""
+
+    def versions(self):
+        return sorted(int(p.stem.split("_v")[1]) for p in FIXTURES.glob("schema_v*.sql"))
+
+    def test_every_version_has_a_fixture(self):
+        self.assertEqual(self.versions(), list(range(1, dbmod.SCHEMA_VERSION + 1)),
+                         "Lancez tools/snapshot_schema.py pour figer chaque version du schéma.")
+
+    def test_old_databases_upgrade_without_loss(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "old.db"
-            conn = sqlite3.connect(path)
-            conn.executescript("""
-                CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                INSERT INTO settings VALUES ('schema_version', '1'), ('default_variables', '{}');
-                CREATE TABLE template_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, position INTEGER NOT NULL DEFAULT 0,
-                    title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', command TEXT NOT NULL DEFAULT '',
-                    weight INTEGER NOT NULL DEFAULT 1, estimated_minutes INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-                INSERT INTO template_tasks (title, created_at, updated_at) VALUES ('Ancienne', 'x', 'x');
-                CREATE TABLE delivery_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, delivery_id INTEGER NOT NULL,
-                    template_task_id INTEGER, position INTEGER NOT NULL DEFAULT 0, title TEXT NOT NULL,
-                    description TEXT NOT NULL DEFAULT '', command TEXT NOT NULL DEFAULT '',
-                    weight INTEGER NOT NULL DEFAULT 1, estimated_minutes INTEGER NOT NULL DEFAULT 0,
-                    status TEXT NOT NULL DEFAULT 'todo', elapsed_seconds INTEGER NOT NULL DEFAULT 0,
-                    running_since TEXT, started_at TEXT, completed_at TEXT);
-            """)
-            conn.commit()
-            conn.close()
-            db = Database(path)
-            tasks = db.list_template_tasks()
-            self.assertEqual(tasks[0]["table_spec"], "")
-            d = db.create_delivery({"version": "1.0"})
-            self.assertEqual(d["tasks"][0]["title"], "Ancienne")
-            self.assertEqual(db.conn.execute("SELECT value FROM settings WHERE key='schema_version'").fetchone()[0], "2")
-            db.conn.close()
+            fresh = Database(Path(tmp) / "fresh.db")
+            expected_schema = schema_of(fresh.conn)
+            fresh.conn.close()
+            for version in self.versions():
+                with self.subTest(version=version):
+                    path = load_fixture(version, tmp)
+                    raw = sqlite3.connect(str(path))
+                    counts = {t: raw.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in TABLES}
+                    comments = raw.execute("SELECT body FROM comments ORDER BY id").fetchall()
+                    images = raw.execute("SELECT data FROM images ORDER BY id").fetchall()
+                    raw.close()
+
+                    db = Database(path)
+                    self.assertEqual(schema_of(db.conn), expected_schema)
+                    for table, count in counts.items():
+                        self.assertEqual(db.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], count, table)
+                    self.assertEqual([tuple(r) for r in db.conn.execute("SELECT body FROM comments ORDER BY id")], comments)
+                    self.assertEqual([tuple(r) for r in db.conn.execute("SELECT data FROM images ORDER BY id")], images)
+                    if version < dbmod.SCHEMA_VERSION:
+                        self.assertTrue(db.backup_path and db.backup_path.exists())
+
+                    # The upgraded database works end to end.
+                    for summary in db.list_deliveries():
+                        d = db.get_delivery(summary["id"])
+                        self.assertTrue(report.build_pdf(d, db).startswith(b"%PDF"))
+                        self.assertTrue(report.build_docx(d, db).startswith(b"PK"))
+                    d = db.create_delivery({"version": "9.9.9"})
+                    d = db.task_action(d["tasks"][0]["id"], "done")
+                    self.assertGreater(d["progress"], 0)
+                    db.conn.close()
+
+    def test_newer_database_is_refused_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = load_fixture(dbmod.SCHEMA_VERSION, tmp)
+            raw = sqlite3.connect(str(path))
+            raw.execute("UPDATE settings SET value=? WHERE key='schema_version'", (str(dbmod.SCHEMA_VERSION + 1),))
+            raw.commit()
+            raw.close()
+            with self.assertRaises(SchemaTooNew):
+                Database(path)
+            raw = sqlite3.connect(str(path))
+            self.assertEqual(raw.execute("SELECT value FROM settings WHERE key='schema_version'").fetchone()[0],
+                             str(dbmod.SCHEMA_VERSION + 1))
+            raw.close()
+
+    def test_failed_migration_rolls_back(self):
+        def broken(conn):
+            conn.execute("ALTER TABLE deliveries ADD COLUMN half_done TEXT")
+            raise RuntimeError("étape en échec")
+
+        nxt = dbmod.SCHEMA_VERSION + 1
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(dbmod.MIGRATIONS, {nxt: broken}), mock.patch.object(dbmod, "SCHEMA_VERSION", nxt):
+            path = load_fixture(nxt - 1, tmp)
+            with self.assertRaises(RuntimeError):
+                Database(path)
+            raw = sqlite3.connect(str(path))
+            cols = {r[1] for r in raw.execute("PRAGMA table_info(deliveries)")}
+            self.assertNotIn("half_done", cols)
+            self.assertEqual(raw.execute("SELECT value FROM settings WHERE key='schema_version'").fetchone()[0],
+                             str(nxt - 1))
+            raw.close()
 
 
 if __name__ == "__main__":

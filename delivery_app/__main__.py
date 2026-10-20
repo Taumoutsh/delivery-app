@@ -9,7 +9,7 @@ import threading
 import webbrowser
 from pathlib import Path
 
-from .db import Database
+from .db import Database, SchemaTooNew
 from .server import make_server
 
 
@@ -40,7 +40,12 @@ def main():
 
     data_dir = Path(args.data).expanduser().resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(data_dir / "delivery.db")
+    try:
+        db = Database(data_dir / "delivery.db")
+    except SchemaTooNew as exc:
+        raise SystemExit(str(exc))
+    if db.backup_path:
+        print(f"Base mise à jour ; sauvegarde de l'ancienne : {db.backup_path}")
     try:
         server = make_server(db, args.host, args.port)
     except OSError as exc:

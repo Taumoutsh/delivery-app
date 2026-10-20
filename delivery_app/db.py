@@ -4,11 +4,12 @@ import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .templating import build_variables, render_command  # noqa: F401 (re-exported)
 
-SCHEMA_VERSION = 2
-
+# Schema of a NEW database, always at the latest version. Existing databases are upgraded
+# by MIGRATIONS below instead. Any change here needs a matching migration (see SPECS.md §3.2).
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
@@ -80,6 +81,24 @@ CREATE INDEX IF NOT EXISTS idx_comments_task ON comments(delivery_task_id);
 CREATE INDEX IF NOT EXISTS idx_images_task ON images(delivery_task_id);
 """
 
+
+def _migrate_v2(conn):
+    """v2: optional link table for Word on tasks."""
+    for table in ("template_tasks", "delivery_tasks"):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN table_spec TEXT NOT NULL DEFAULT ''")
+
+
+# version -> step upgrading a database from (version - 1). Steps run in order, in one transaction.
+# Never edit a released step: add a new one.
+MIGRATIONS = {
+    2: _migrate_v2,
+}
+SCHEMA_VERSION = max(MIGRATIONS)
+
+
+class SchemaTooNew(Exception):
+    """The database was written by a more recent version of the app."""
+
 SEED_TASKS = [
     ("Mettre à jour le numéro de version",
      "Mettre à jour le fichier de version et le changelog avant de créer la branche.",
@@ -146,34 +165,68 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")
+        self.backup_path = None
         self._migrate()
 
     # -- infrastructure -------------------------------------------------
 
     def _migrate(self):
-        with self._lock, self.conn:
-            self.conn.executescript(SCHEMA)
+        with self._lock:
+            has_settings = self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'").fetchone()
+            if not has_settings:
+                self._create_fresh()
+                return
             row = self.conn.execute("SELECT value FROM settings WHERE key='schema_version'").fetchone()
-            if row is None:
-                self.conn.execute("INSERT INTO settings VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
-                self.conn.execute("INSERT INTO settings VALUES ('default_variables', ?)",
-                                  (json.dumps({"prev_version": ""}),))
-                ts = now_iso()
-                for pos, seed in enumerate(SEED_TASKS):
-                    title, desc, cmd, weight, est = seed[:5]
-                    table = seed[5] if len(seed) > 5 else ""
-                    self.conn.execute(
-                        "INSERT INTO template_tasks (position, title, description, command, table_spec, weight,"
-                        " estimated_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                        (pos, title, desc, cmd, table, weight, est, ts, ts))
-            else:
-                version = int(row["value"])
-                if version < 2:  # v2: link tables for Word
-                    for table in ("template_tasks", "delivery_tasks"):
-                        cols = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
-                        if "table_spec" not in cols:
-                            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN table_spec TEXT NOT NULL DEFAULT ''")
-                self.conn.execute("UPDATE settings SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
+            version = int(row["value"]) if row else 1
+            if version > SCHEMA_VERSION:
+                raise SchemaTooNew(
+                    f"La base {self.path} est au format v{version}, plus récent que cette application "
+                    f"(v{SCHEMA_VERSION}). Utilisez une version plus récente de l'application.")
+            if version == SCHEMA_VERSION:
+                return
+            self.backup_path = self._backup(version)
+            self.conn.isolation_level = None  # manual transaction: all steps or none
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                for target in range(version + 1, SCHEMA_VERSION + 1):
+                    MIGRATIONS[target](self.conn)
+                self.conn.execute("INSERT OR REPLACE INTO settings VALUES ('schema_version', ?)",
+                                  (str(SCHEMA_VERSION),))
+                self.conn.execute("COMMIT")
+            except Exception:
+                self.conn.execute("ROLLBACK")
+                raise
+            finally:
+                self.conn.isolation_level = ""
+
+    def _create_fresh(self):
+        with self.conn:
+            self.conn.executescript(SCHEMA)
+            self.conn.execute("INSERT INTO settings VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
+            self.conn.execute("INSERT INTO settings VALUES ('default_variables', ?)",
+                              (json.dumps({"prev_version": ""}),))
+            ts = now_iso()
+            for pos, seed in enumerate(SEED_TASKS):
+                title, desc, cmd, weight, est = seed[:5]
+                table = seed[5] if len(seed) > 5 else ""
+                self.conn.execute(
+                    "INSERT INTO template_tasks (position, title, description, command, table_spec, weight,"
+                    " estimated_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (pos, title, desc, cmd, table, weight, est, ts, ts))
+
+    def _backup(self, version):
+        """Copy the database next to itself before upgrading it (delivery.db.v1-20261020-154700.bak)."""
+        if self.path == ":memory:":
+            return None
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = Path(self.path).with_name(f"{Path(self.path).name}.v{version}-{stamp}.bak")
+        dest = sqlite3.connect(str(target))
+        try:
+            self.conn.backup(dest)
+        finally:
+            dest.close()
+        return target
 
     def _all(self, sql, args=()):
         return [dict(r) for r in self.conn.execute(sql, args).fetchall()]

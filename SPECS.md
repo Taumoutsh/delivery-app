@@ -144,10 +144,39 @@ Choix :
 - `images(id, delivery_task_id, filename, mime, size, data BLOB, created_at)`
 
 Horodatages en UTC ISO-8601 (`2026-10-20T15:47:40Z`). Suppressions en cascade.
-Migrations : incrémenter `SCHEMA_VERSION` dans `db.py` et ajouter l'étape dans `_migrate()`.
-v1 → v2 : ajout de `table_spec` aux deux tables de tâches (`ALTER TABLE`).
+### 3.2 Compatibilité des bases (procédure obligatoire)
 
-### 3.2 API
+La version du schéma est stockée dans `settings.schema_version`. Au démarrage (`Database._migrate`) :
+
+| Base trouvée | Comportement |
+|--------------|--------------|
+| absente / vide | création directe au dernier schéma (`SCHEMA`) + tâches d'exemple |
+| même version | rien |
+| plus ancienne | **copie de sauvegarde** `delivery.db.vN-AAAAMMJJ-HHMMSS.bak` à côté de la base, puis toutes les étapes `MIGRATIONS[N+1..]` dans **une seule transaction** (en cas d'erreur : rollback, base intacte) |
+| plus récente | **refus de démarrer** avec un message clair, base non modifiée (une vieille app ne doit jamais toucher une base récente) |
+
+Historique : v1 → v2 ajoute `table_spec` aux deux tables de tâches.
+
+Pour toute évolution qui touche la base :
+
+1. **Avant** de modifier le schéma, vérifier que `tests/fixtures/schema_v<actuelle>.sql` existe
+   (sinon : `python tools/snapshot_schema.py`). Ces fichiers sont de vraies bases d'exemple produites
+   par chaque version publiée ; ne jamais les modifier ni les supprimer.
+2. Modifier `SCHEMA` (pour les nouvelles bases) **et** ajouter l'étape `MIGRATIONS[n+1]` (pour les
+   anciennes). Ne jamais modifier une étape déjà publiée.
+3. Règles de sûreté : uniquement des changements additifs (nouvelle table, nouvelle colonne avec
+   `DEFAULT`) ; pas de renommage ni suppression de colonne (l'ancienne colonne reste, simplement
+   ignorée) ; si une donnée doit être transformée, le faire en SQL dans l'étape de migration.
+4. `python -m unittest discover tests` : `CompatibilityTest` charge chaque fixture, la migre, vérifie
+   que le schéma obtenu est identique à celui d'une base neuve (attrape l'oubli d'une migration), que
+   rien n'est perdu (comptes, commentaires, images), et que l'app fonctionne dessus (rapports, chrono).
+5. Une fois la version publiée : `python tools/snapshot_schema.py` pour figer la nouvelle version,
+   puis commit de la fixture (le test `test_every_version_has_a_fixture` le rappelle).
+
+Côté utilisateur : garder `data/` lors d'une mise à jour (remplacer seulement l'app ou le `.pyz`) ;
+la sauvegarde `.bak` permet de revenir en arrière avec l'ancienne version de l'app.
+
+### 3.3 API
 
 | Méthode | Route | Rôle |
 |---------|-------|------|
@@ -207,3 +236,5 @@ description et commandes **résolues**, tableau de liens, commentaires horodaté
 - **v1.1 (2026-10-20)** — Tableaux de liens pour Word par tâche (E13). Suppression de toutes les
   dépendances (E14) : générateurs PDF et .docx maison, polices embarquées, `launch.py`, archive
   `.pyz` unique, migration de schéma v2. Les GIF/WebP sont convertis en PNG par le navigateur.
+- **v1.2 (2026-10-20)** — Compatibilité des bases : migrations transactionnelles, sauvegarde
+  automatique avant migration, refus d'une base plus récente, fixtures v1/v2 et tests de compatibilité.
