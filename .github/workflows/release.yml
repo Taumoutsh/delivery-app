@@ -1,9 +1,14 @@
-# Publishes a GitHub release when a version tag (vX.Y.Z) is pushed.
-# The tag must match delivery_app.__version__ and have a section in CHANGELOG.md.
+# Publishes the GitHub release vX.Y.Z for delivery_app.__version__ (which needs a CHANGELOG.md section):
+# - when the version (or this file) changes on main,
+# - when a vX.Y.Z tag is pushed (it must match the version),
+# - or on manual dispatch.
+# Does nothing if that release already exists.
 name: Release
 
 on:
   push:
+    branches: [main]
+    paths: ["delivery_app/__init__.py", ".github/workflows/release.yml"]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -43,6 +48,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(python -c "import delivery_app; print(delivery_app.__version__)")
+          if gh release view "v${version}" >/dev/null 2>&1; then
+            echo "Release v${version} already exists, nothing to do."
+            exit 0
+          fi
           gh release create "v${version}" dist/*.pyz dist/*.zip dist/SHA256SUMS.txt \
             --title "Checklist Livraison ${version}" --notes-file dist/RELEASE_NOTES.md \
             --target "${GITHUB_SHA}"

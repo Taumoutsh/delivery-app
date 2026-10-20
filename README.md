@@ -31,8 +31,9 @@ Copiez ce seul fichier dans l'environnement cible et lancez-le avec `python`.
 
 1. Mettre à jour `__version__` dans `delivery_app/__init__.py` et ajouter la section dans `CHANGELOG.md`.
 2. `python tools/build_release.py` : tests + `dist/` (`.pyz`, `.zip` avec guide d'installation, `SHA256SUMS.txt`).
-3. `git tag v1.2.0 && git push origin v1.2.0` : le workflow `.github/workflows/release.yml` teste sous
-   Python 3.8 et 3.12 puis publie la release GitHub avec ces fichiers.
+3. Fusionner dans `main` : quand la version change, le workflow `.github/workflows/release.yml` teste
+   sous Python 3.8 et 3.12 puis publie la release GitHub `vX.Y.Z` avec ces fichiers (un tag `vX.Y.Z`
+   poussé à la main fonctionne aussi).
 
 ## Développer
 
