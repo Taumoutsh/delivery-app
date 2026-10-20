@@ -3,6 +3,15 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.6.0 — 2026-10-20
+
+- Nom de l'application modifiable : cliquer sur le titre en haut de la barre latérale. Il est repris
+  dans l'onglet du navigateur et en tête des rapports PDF/Word.
+- Version de l'application affichée en bas de la barre latérale (avec le format de la base) et dans
+  les rapports (« <nom> <version> » en en-tête et en pied de page) ; fenêtre « Application » avec
+  ces informations.
+- Aucun changement de format de base.
+
 ## 1.5.1 — 2026-10-20
 
 - Correctif : dans la fenêtre de modification d'une tâche, seul le contenu défile désormais ; le titre

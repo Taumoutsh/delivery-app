@@ -6,6 +6,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import __version__
 from . import blocks as blockreg
 from .templating import build_variables, render_command  # noqa: F401 (re-exported)
 
@@ -231,6 +232,9 @@ SEED_TASKS = [
        "Paquet | [app-{{version}}.tar.gz](https://artifacts.example.com/app/{{version}}/app-{{version}}.tar.gz)"}]),
 ]
 
+# Name shown in the sidebar, the browser tab and the reports until the user changes it.
+DEFAULT_APP_TITLE = "Checklist Livraison"
+
 # Media files not referenced by any block are deleted after this delay (abandoned uploads).
 MEDIA_GRACE_DAYS = 1
 
@@ -348,15 +352,28 @@ class Database:
 
     def get_settings(self):
         with self._lock:
-            row = self._one("SELECT value FROM settings WHERE key='default_variables'")
-            return {"default_variables": json.loads(row["value"]) if row else {}}
+            rows = {r["key"]: r["value"] for r in self._all("SELECT key, value FROM settings")}
+            return {
+                "default_variables": json.loads(rows.get("default_variables") or "{}"),
+                "app_title": rows.get("app_title") or DEFAULT_APP_TITLE,
+                "app_version": __version__,
+                "schema_version": int(rows.get("schema_version") or SCHEMA_VERSION),
+            }
 
     def save_settings(self, data):
-        variables = {str(k): str(v) for k, v in (data.get("default_variables") or {}).items()}
+        """Update the given settings only (the others are kept)."""
         with self._lock, self.conn:
-            self.conn.execute("INSERT OR REPLACE INTO settings VALUES ('default_variables', ?)",
-                              (json.dumps(variables),))
+            if "default_variables" in data:
+                variables = {str(k): str(v) for k, v in (data["default_variables"] or {}).items()}
+                self.conn.execute("INSERT OR REPLACE INTO settings VALUES ('default_variables', ?)",
+                                  (json.dumps(variables),))
+            if "app_title" in data:
+                title = " ".join(str(data["app_title"] or "").split())[:60] or DEFAULT_APP_TITLE
+                self.conn.execute("INSERT OR REPLACE INTO settings VALUES ('app_title', ?)", (title,))
         return self.get_settings()
+
+    def app_title(self):
+        return self.get_settings()["app_title"]
 
     # -- template tasks -------------------------------------------------
 

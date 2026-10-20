@@ -64,8 +64,9 @@ def image_ext(data):
 
 
 class Docx:
-    def __init__(self, title=""):
+    def __init__(self, title="", creator="Checklist Livraison"):
         self.title = title
+        self.creator = creator
         self.body = []
         self.rels = []
         self.media = []
@@ -196,7 +197,7 @@ class Docx:
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr("[Content_Types].xml", CONTENT_TYPES)
             z.writestr("_rels/.rels", ROOT_RELS)
-            z.writestr("docProps/core.xml", CORE.format(title=x(self.title)))
+            z.writestr("docProps/core.xml", CORE.format(title=x(self.title), creator=x(self.creator)))
             z.writestr("word/document.xml", document)
             z.writestr("word/styles.xml", STYLES)
             z.writestr("word/_rels/document.xml.rels",
@@ -227,7 +228,7 @@ ROOT_RELS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </Relationships>"""
 
 CORE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>{title}</dc:title><dc:creator>Checklist Livraison</dc:creator></cp:coreProperties>"""
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>{title}</dc:title><dc:creator>{creator}</dc:creator></cp:coreProperties>"""
 
 STYLES = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">

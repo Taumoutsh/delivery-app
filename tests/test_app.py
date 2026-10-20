@@ -6,6 +6,7 @@ Run: python -m unittest discover tests
 import io
 import json
 import random
+import re
 import sqlite3
 import struct
 import tempfile
@@ -231,6 +232,26 @@ class ApiTest(unittest.TestCase):
         finally:
             self.server.RequestHandlerClass.allow_launch = True
 
+    def test_app_title_and_version(self):
+        from delivery_app import __version__
+        _, st = self.call("GET", "/api/settings")
+        self.assertEqual((st["app_title"], st["app_version"], st["schema_version"]),
+                         ("Checklist Livraison", __version__, dbmod.SCHEMA_VERSION))
+        self.call("PUT", "/api/settings", {"default_variables": {"env": "prod"}})
+        _, st = self.call("PUT", "/api/settings", {"app_title": "  Livraisons   ACME "})
+        self.assertEqual(st["app_title"], "Livraisons ACME")
+        self.assertEqual(st["default_variables"], {"env": "prod"})  # untouched by a title change
+        _, d = self.call("POST", "/api/deliveries", {"version": "8.0.0"})
+        status, pdf = self.call("GET", f"/api/deliveries/{d['id']}/report.pdf")
+        self.assertEqual(status, 200)
+        self.assertIn(b"(Livraisons ACME", pdf_content(pdf))
+        _, docx = self.call("GET", f"/api/deliveries/{d['id']}/report.docx")
+        with zipfile.ZipFile(io.BytesIO(docx)) as z:
+            self.assertIn(f"Livraisons ACME {__version__}", z.read("word/document.xml").decode())
+            self.assertIn("Livraisons ACME", z.read("docProps/core.xml").decode())
+        _, st = self.call("PUT", "/api/settings", {"app_title": "   "})
+        self.assertEqual(st["app_title"], "Checklist Livraison")
+
     def test_requests_from_other_sites_are_refused(self):
         self.assertEqual(self.call("POST", "/api/deliveries", {"version": "9"}, app=False)[0], 403)
         self.assertEqual(self.call("DELETE", "/api/tasks/1", app=False)[0], 403)
@@ -284,6 +305,12 @@ def make_png(width, height, channels, seed=1):
     png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, ctype, 0, 0, 0))
            + chunk(b"IDAT", zlib.compress(bytes(raw))) + chunk(b"IEND", b""))
     return png, pixels
+
+
+def pdf_content(data):
+    """Decompressed content streams of a PDF (where its text lives)."""
+    return b"".join(zlib.decompress(m.group(1)) for m in
+                    re.finditer(rb"<< /Filter /FlateDecode /Length \d+ >>\nstream\n(.*?)\nendstream", data, re.S))
 
 
 class WritersTest(unittest.TestCase):
