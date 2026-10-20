@@ -22,8 +22,10 @@ CREATE TABLE IF NOT EXISTS template_tasks (
     position          INTEGER NOT NULL DEFAULT 0,
     title             TEXT    NOT NULL,
     description       TEXT    NOT NULL DEFAULT '',
-    command           TEXT    NOT NULL DEFAULT '',
-    table_spec        TEXT    NOT NULL DEFAULT '',
+    command           TEXT    NOT NULL DEFAULT '',   -- legacy (v1-v2), replaced by commands
+    table_spec        TEXT    NOT NULL DEFAULT '',   -- legacy (v2), replaced by link_tables
+    commands          TEXT    NOT NULL DEFAULT '[]', -- JSON [{"label": str, "text": str}]
+    link_tables       TEXT    NOT NULL DEFAULT '[]', -- JSON [{"title": str, "spec": str}]
     weight            INTEGER NOT NULL DEFAULT 1,
     estimated_minutes INTEGER NOT NULL DEFAULT 0,
     created_at        TEXT    NOT NULL,
@@ -48,8 +50,10 @@ CREATE TABLE IF NOT EXISTS delivery_tasks (
     position          INTEGER NOT NULL DEFAULT 0,
     title             TEXT    NOT NULL,
     description       TEXT    NOT NULL DEFAULT '',
-    command           TEXT    NOT NULL DEFAULT '',
-    table_spec        TEXT    NOT NULL DEFAULT '',
+    command           TEXT    NOT NULL DEFAULT '',   -- legacy (v1-v2), replaced by commands
+    table_spec        TEXT    NOT NULL DEFAULT '',   -- legacy (v2), replaced by link_tables
+    commands          TEXT    NOT NULL DEFAULT '[]', -- JSON [{"label": str, "text": str}]
+    link_tables       TEXT    NOT NULL DEFAULT '[]', -- JSON [{"title": str, "spec": str}]
     weight            INTEGER NOT NULL DEFAULT 1,
     estimated_minutes INTEGER NOT NULL DEFAULT 0,
     status            TEXT    NOT NULL DEFAULT 'todo', -- todo | running | paused | done | skipped
@@ -88,10 +92,23 @@ def _migrate_v2(conn):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN table_spec TEXT NOT NULL DEFAULT ''")
 
 
+def _migrate_v3(conn):
+    """v3: several command blocks and several Word tables per task (JSON lists)."""
+    for table in ("template_tasks", "delivery_tasks"):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN commands TEXT NOT NULL DEFAULT '[]'")
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN link_tables TEXT NOT NULL DEFAULT '[]'")
+        for task_id, command, spec in conn.execute(f"SELECT id, command, table_spec FROM {table}").fetchall():
+            commands = [{"label": "", "text": command}] if command.strip() else []
+            tables = [{"title": "", "spec": spec}] if spec.strip() else []
+            conn.execute(f"UPDATE {table} SET commands=?, link_tables=? WHERE id=?",
+                         (json.dumps(commands, ensure_ascii=False), json.dumps(tables, ensure_ascii=False), task_id))
+
+
 # version -> step upgrading a database from (version - 1). Steps run in order, in one transaction.
 # Never edit a released step: add a new one.
 MIGRATIONS = {
     2: _migrate_v2,
+    3: _migrate_v3,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 
@@ -99,40 +116,50 @@ SCHEMA_VERSION = max(MIGRATIONS)
 class SchemaTooNew(Exception):
     """The database was written by a more recent version of the app."""
 
+# (title, description, [(label, command)], weight, estimated minutes, [(table title, table spec)])
 SEED_TASKS = [
     ("Mettre à jour le numéro de version",
      "Mettre à jour le fichier de version et le changelog avant de créer la branche.",
-     'git checkout develop && git pull\necho "{{version}}" > VERSION\ngit commit -am "chore: bump version to {{version}}"',
-     2, 10),
+     [("", 'git checkout develop && git pull\necho "{{version}}" > VERSION\n'
+           'git commit -am "chore: bump version to {{version}}"')],
+     2, 10, []),
     ("Créer la branche de release",
      "La branche part de develop à jour.",
-     "git checkout -b release/{{version}}\ngit push -u origin release/{{version}}",
-     1, 5),
+     [("", "git checkout -b release/{{version}}\ngit push -u origin release/{{version}}")],
+     1, 5, []),
     ("Lancer la suite de tests",
      "Tous les tests doivent passer. Joindre une capture du rapport en cas d'échec.",
-     "make test\nmake lint",
-     3, 30),
+     [("Tests", "make test"), ("Qualité", "make lint")],
+     3, 30, []),
     ("Construire les artefacts",
      "Build de l'image et du paquet pour la version.",
-     "docker build -t registry.local/app:{{version}} .\ndocker push registry.local/app:{{version}}",
-     3, 20),
+     [("Image Docker", "docker build -t registry.local/app:{{version}} .\ndocker push registry.local/app:{{version}}"),
+      ("Paquet", "make package VERSION={{version}}")],
+     3, 20, []),
     ("Tagger la version",
      "Tag annoté, comparé à la version précédente {{prev_version}}.",
-     'git tag -a v{{version}} -m "Release {{version}}"\ngit push origin v{{version}}\ngit log --oneline v{{prev_version}}..v{{version}}',
-     1, 5),
+     [("Créer le tag", 'git tag -a v{{version}} -m "Release {{version}}"\ngit push origin v{{version}}'),
+      ("Changements depuis {{prev_version}}", "git log --oneline v{{prev_version}}..v{{version}}")],
+     1, 5, []),
     ("Déployer en recette",
      "Vérifier les logs après déploiement.",
-     "./deploy.sh --env recette --version {{version}}",
-     3, 25),
+     [("", "./deploy.sh --env recette --version {{version}}")],
+     3, 25, []),
     ("Rédiger les notes de version",
      "Résumé des changements depuis {{prev_version}}, à envoyer à l'équipe.",
-     "",
+     [],
      2, 20,
-     "Élément | Lien\n"
-     "Notes de version {{version}} | [Wiki — release {{version}}](https://wiki.example.com/releases/{{version}})\n"
-     "Tag Git | [v{{version}}](https://git.example.com/app/-/tags/v{{version}})\n"
-     "Comparaison | [v{{prev_version}}...v{{version}}](https://git.example.com/app/-/compare/v{{prev_version}}...v{{version}})"),
+     [("Liens de la livraison",
+       "Élément | Lien\n"
+       "Notes de version {{version}} | [Wiki — release {{version}}](https://wiki.example.com/releases/{{version}})\n"
+       "Tag Git | [v{{version}}](https://git.example.com/app/-/tags/v{{version}})\n"
+       "Comparaison | [v{{prev_version}}...v{{version}}](https://git.example.com/app/-/compare/v{{prev_version}}...v{{version}})"),
+      ("Livrables",
+       "Livrable | Emplacement\n"
+       "Image Docker | [registry.local/app:{{version}}](https://registry.local/harbor/projects/app/tags/{{version}})\n"
+       "Paquet | [app-{{version}}.tar.gz](https://artifacts.example.com/app/{{version}}/app-{{version}}.tar.gz)")]),
 ]
+
 
 def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -211,13 +238,15 @@ class Database:
             self.conn.execute("INSERT INTO settings VALUES ('default_variables', ?)",
                               (json.dumps({"prev_version": ""}),))
             ts = now_iso()
-            for pos, seed in enumerate(SEED_TASKS):
-                title, desc, cmd, weight, est = seed[:5]
-                table = seed[5] if len(seed) > 5 else ""
+            for pos, (title, desc, commands, weight, est, tables) in enumerate(SEED_TASKS):
+                fields = _task_fields({
+                    "title": title, "description": desc, "weight": weight, "estimated_minutes": est,
+                    "commands": [{"label": label, "text": text} for label, text in commands],
+                    "link_tables": [{"title": t, "spec": spec} for t, spec in tables]})
                 self.conn.execute(
-                    "INSERT INTO template_tasks (position, title, description, command, table_spec, weight,"
+                    "INSERT INTO template_tasks (position, title, description, commands, link_tables, weight,"
                     " estimated_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                    (pos, title, desc, cmd, table, weight, est, ts, ts))
+                    (pos, *fields, ts, ts))
 
     def _backup(self, version):
         """Copy the database next to itself before upgrading it (delivery.db.v1-20261020-154700.bak)."""
@@ -257,29 +286,29 @@ class Database:
 
     def list_template_tasks(self):
         with self._lock:
-            return self._all("SELECT * FROM template_tasks ORDER BY position, id")
+            return [_task_out(t) for t in self._all("SELECT * FROM template_tasks ORDER BY position, id")]
 
     def create_template_task(self, data):
         ts = now_iso()
         with self._lock, self.conn:
             pos = self.conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM template_tasks").fetchone()[0]
             cur = self.conn.execute(
-                "INSERT INTO template_tasks (position, title, description, command, table_spec, weight,"
+                "INSERT INTO template_tasks (position, title, description, commands, link_tables, weight,"
                 " estimated_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 (pos, *_task_fields(data), ts, ts))
-            return self._one("SELECT * FROM template_tasks WHERE id=?", (cur.lastrowid,))
+            return _task_out(self._one("SELECT * FROM template_tasks WHERE id=?", (cur.lastrowid,)))
 
     def update_template_task(self, task_id, data):
         with self._lock, self.conn:
             current = self._one("SELECT * FROM template_tasks WHERE id=?", (task_id,))
             if not current:
                 return None
-            merged = {**current, **data}
+            merged = {**_task_out(current), **data}
             self.conn.execute(
-                "UPDATE template_tasks SET title=?, description=?, command=?, table_spec=?, weight=?,"
+                "UPDATE template_tasks SET title=?, description=?, commands=?, link_tables=?, weight=?,"
                 " estimated_minutes=?, updated_at=? WHERE id=?",
                 (*_task_fields(merged), now_iso(), task_id))
-            return self._one("SELECT * FROM template_tasks WHERE id=?", (task_id,))
+            return _task_out(self._one("SELECT * FROM template_tasks WHERE id=?", (task_id,)))
 
     def delete_template_task(self, task_id):
         with self._lock, self.conn:
@@ -319,9 +348,9 @@ class Database:
             for t in self._all("SELECT * FROM template_tasks ORDER BY position, id"):
                 self.conn.execute(
                     "INSERT INTO delivery_tasks (delivery_id, template_task_id, position, title, description,"
-                    " command, table_spec, weight, estimated_minutes) VALUES (?,?,?,?,?,?,?,?,?)",
-                    (delivery_id, t["id"], t["position"], t["title"], t["description"], t["command"],
-                     t["table_spec"], t["weight"], t["estimated_minutes"]))
+                    " commands, link_tables, weight, estimated_minutes) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (delivery_id, t["id"], t["position"], t["title"], t["description"], t["commands"],
+                     t["link_tables"], t["weight"], t["estimated_minutes"]))
         return self.get_delivery(delivery_id)
 
     def get_delivery(self, delivery_id):
@@ -330,8 +359,8 @@ class Database:
             if not d:
                 return None
             d["variables"] = json.loads(d["variables"])
-            tasks = self._all("SELECT * FROM delivery_tasks WHERE delivery_id=? ORDER BY position, id",
-                              (delivery_id,))
+            tasks = [_task_out(t) for t in self._all(
+                "SELECT * FROM delivery_tasks WHERE delivery_id=? ORDER BY position, id", (delivery_id,))]
             for t in tasks:
                 t["comments"] = self._all(
                     "SELECT id, body, created_at FROM comments WHERE delivery_task_id=? ORDER BY id", (t["id"],))
@@ -374,7 +403,8 @@ class Database:
 
     def get_delivery_task(self, task_id):
         with self._lock:
-            return self._task(task_id)
+            task = self._task(task_id)
+            return _task_out(task) if task else None
 
     def add_delivery_task(self, delivery_id, data):
         with self._lock, self.conn:
@@ -387,7 +417,7 @@ class Database:
                                     " WHERE delivery_id=?", (delivery_id,)).fetchone()[0]
             self.conn.execute(
                 "INSERT INTO delivery_tasks (delivery_id, template_task_id, position, title, description,"
-                " command, table_spec, weight, estimated_minutes) VALUES (?,?,?,?,?,?,?,?,?)",
+                " commands, link_tables, weight, estimated_minutes) VALUES (?,?,?,?,?,?,?,?,?)",
                 (delivery_id, template_id, pos, *_task_fields(data)))
         return self.get_delivery(delivery_id)
 
@@ -396,9 +426,9 @@ class Database:
             current = self._task(task_id)
             if not current:
                 return None
-            merged = {**current, **data}
+            merged = {**_task_out(current), **data}
             self.conn.execute(
-                "UPDATE delivery_tasks SET title=?, description=?, command=?, table_spec=?, weight=?,"
+                "UPDATE delivery_tasks SET title=?, description=?, commands=?, link_tables=?, weight=?,"
                 " estimated_minutes=?"
                 " WHERE id=?", (*_task_fields(merged), task_id))
         return self.get_delivery(current["delivery_id"])
@@ -495,15 +525,53 @@ class Database:
         return self.get_delivery(row["delivery_id"])
 
 
+def _json_list(value):
+    if isinstance(value, str):
+        try:
+            value = json.loads(value or "[]")
+        except ValueError:
+            return []
+    return value if isinstance(value, list) else []
+
+
+def _clean_commands(value):
+    """[{"label", "text"}] without empty blocks."""
+    out = []
+    for item in _json_list(value):
+        if isinstance(item, dict) and str(item.get("text") or "").strip():
+            out.append({"label": str(item.get("label") or "").strip(), "text": str(item["text"])})
+    return out
+
+
+def _clean_tables(value):
+    """[{"title", "spec"}] without empty tables."""
+    out = []
+    for item in _json_list(value):
+        if isinstance(item, dict) and str(item.get("spec") or "").strip():
+            out.append({"title": str(item.get("title") or "").strip(), "spec": str(item["spec"])})
+    return out
+
+
+def _task_out(task):
+    """API shape of a task row: JSON lists decoded, legacy v1/v2 columns hidden."""
+    task = dict(task)
+    task.pop("command", None)
+    task.pop("table_spec", None)
+    task["commands"] = _clean_commands(task.get("commands"))
+    task["link_tables"] = _clean_tables(task.get("link_tables"))
+    return task
+
+
 def _task_fields(data):
+    """Values for (title, description, commands, link_tables, weight, estimated_minutes)."""
     title = str(data.get("title") or "").strip()
     if not title:
         raise ValueError("Le titre est obligatoire.")
     return (
         title,
         str(data.get("description") or ""),
-        str(data.get("command") or ""),
-        str(data.get("table_spec") or ""),
+        json.dumps(_clean_commands(data.get("commands")), ensure_ascii=False),
+        json.dumps(_clean_tables(data.get("link_tables")), ensure_ascii=False),
         max(0, int(data.get("weight") or 0)),
         max(0, int(data.get("estimated_minutes") or 0)),
     )

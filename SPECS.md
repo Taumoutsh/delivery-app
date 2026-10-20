@@ -23,6 +23,8 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E12 | Une ou plusieurs images par tâche (miniature, agrandie à la demande) | ✅ |
 | E13 | Pour certaines tâches, générer un tableau avec liens à insérer dans un document Word | ✅ copie riche + .docx |
 | E14 | Tout embarquer : l'environnement cible n'exécute qu'un Python (pas de pip, pas d'internet) | ✅ stdlib uniquement |
+| E15 | Plusieurs lignes de commande par tâche | ✅ blocs libellés, un bouton Copier chacun |
+| E16 | Plusieurs éléments Word (tableaux) par tâche | ✅ tableaux titrés, copie/.docx un par un ou tous |
 
 ## 2. Concepts
 
@@ -50,9 +52,17 @@ et dans le rapport. Une variable inconnue reste telle quelle et est signalée (s
 
 Les variables personnalisées surchargent les variables intégrées.
 
-### 2.2 Tableau pour Word (E13)
+### 2.2 Blocs de commande (E2, E15)
 
-Champ optionnel `table_spec` d'une tâche (modèle et livraison). Syntaxe, une rangée par ligne :
+Une tâche porte une liste `commands` de blocs `{label, text}` (JSON en base). `label` est optionnel
+(ex. « Linux », « Build ») et accepte les variables ; `text` peut faire plusieurs lignes. Chaque bloc a
+son bouton Copier ; les blocs vides sont ignorés à l'enregistrement. Dans le formulaire : ajout,
+retrait, monter/descendre.
+
+### 2.3 Tableaux pour Word (E13, E16)
+
+Une tâche porte une liste `link_tables` de tableaux `{title, spec}` (JSON en base) ; `title` est
+optionnel. Syntaxe de `spec`, une rangée par ligne :
 
 ```
 Élément | Lien
@@ -64,16 +74,18 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
   Markdown) ignorés ; rangées courtes complétées par des cellules vides.
 - Liens : `[texte](url)` ou URL brute `http(s)://…` ; texte et liens peuvent se mélanger dans une cellule.
 - Variables `{{…}}` substituées comme pour les commandes. Un `|` ne peut pas figurer dans une URL.
-- Dans la tâche : aperçu du tableau, puis
+- Dans la tâche : aperçu de chaque tableau (avec son titre), puis pour chacun
   - **Copier pour Word** : presse-papiers HTML (styles en ligne : bordures, en-tête coloré, liens
     cliquables) + texte tabulé ; on colle directement dans Word. Repli `execCommand('copy')` si l'API
     Clipboard est refusée.
-  - **Télécharger en .docx** : document contenant uniquement le tableau (Word : Insertion › Objet ›
+  - **Télécharger en .docx** : document contenant uniquement ce tableau (Word : Insertion › Objet ›
     Texte d'un fichier, ou copier-coller).
+  - S'il y a plusieurs tableaux : **Copier tous les tableaux** / **Tous en .docx**, chaque tableau
+    précédé de son titre.
 - Le tableau figure aussi dans les rapports PDF (liens cliquables) et Word (hyperliens).
 - Parseur en double : `templating.parse_table` (Python) et `parseTable` (`app.js`) — les garder alignés.
 
-### 2.3 Statuts et chrono
+### 2.4 Statuts et chrono
 
 `todo` → `running` ⇄ `paused` → `done` | `skipped` (non applicable).
 
@@ -85,7 +97,7 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
 - Plusieurs tâches peuvent tourner en parallèle. Le temps est calculé côté serveur (UTC),
   l'interface rafraîchit l'affichage chaque seconde. Dépassement de l'estimé affiché en orange.
 
-### 2.4 Progression
+### 2.5 Progression
 
 `progression = Σ poids(validées) / Σ poids(toutes sauf non applicables)`.
 La barre est segmentée : un segment par tâche, largeur proportionnelle au poids, couleur selon
@@ -136,13 +148,14 @@ Choix :
 - Variables d'environnement : `DELIVERY_PORT`, `DELIVERY_HOST`, `DELIVERY_DATA`.
 - Polices IBM Plex (licence OFL) embarquées dans `static/fonts/` (sous-ensemble latin, ~150 Ko).
 
-### 3.1 Schéma (version 2)
+### 3.1 Schéma (version 3)
 
 - `settings(key, value)` — `schema_version`, `default_variables` (JSON).
-- `template_tasks(id, position, title, description, command, table_spec, weight, estimated_minutes, created_at, updated_at)`
+- `template_tasks(id, position, title, description, commands JSON, link_tables JSON, weight, estimated_minutes,
+  created_at, updated_at)` + colonnes historiques `command`, `table_spec` (v1/v2, conservées mais inutilisées)
 - `deliveries(id, version, name, variables JSON, status, created_at, completed_at)`
 - `delivery_tasks(id, delivery_id→deliveries, template_task_id→template_tasks, position, title,
-  description, command, table_spec, weight, estimated_minutes, status, elapsed_seconds, running_since,
+  description, commands JSON, link_tables JSON, weight, estimated_minutes, status, elapsed_seconds, running_since,
   started_at, completed_at)`
 - `comments(id, delivery_task_id, body, created_at)`
 - `images(id, delivery_task_id, filename, mime, size, data BLOB, created_at)`
@@ -159,7 +172,9 @@ La version du schéma est stockée dans `settings.schema_version`. Au démarrage
 | plus ancienne | **copie de sauvegarde** `delivery.db.vN-AAAAMMJJ-HHMMSS.bak` à côté de la base, puis toutes les étapes `MIGRATIONS[N+1..]` dans **une seule transaction** (en cas d'erreur : rollback, base intacte) |
 | plus récente | **refus de démarrer** avec un message clair, base non modifiée (une vieille app ne doit jamais toucher une base récente) |
 
-Historique : v1 → v2 ajoute `table_spec` aux deux tables de tâches.
+Historique : v1 → v2 ajoute `table_spec` aux deux tables de tâches ; v2 → v3 ajoute `commands` et
+`link_tables` (listes JSON) et y reprend l'ancienne commande et l'ancien tableau de chaque tâche.
+L'API n'expose plus `command` / `table_spec`.
 
 Pour toute évolution qui touche la base :
 
@@ -194,7 +209,8 @@ la sauvegarde `.bak` permet de revenir en arrière avec l'ancienne version de l'
 | POST | `/api/deliveries/{id}/reorder` | réordonner |
 | GET | `/api/deliveries/{id}/report.pdf` · `.docx` | rapport |
 | PUT/DELETE | `/api/delivery-tasks/{id}` | modifier / retirer |
-| GET | `/api/delivery-tasks/{id}/table.docx` | tableau de liens seul, en .docx |
+| GET | `/api/delivery-tasks/{id}/tables.docx` | tous les tableaux de la tâche, titrés, en .docx (`table.docx` : alias) |
+| GET | `/api/delivery-tasks/{id}/tables/{n}.docx` | le n-ième tableau seul (à partir de 0) |
 | POST | `/api/delivery-tasks/{id}/action` | `{action: start|pause|done|skip|reopen|reset}` |
 | POST | `/api/delivery-tasks/{id}/comments` | `{body}` |
 | POST | `/api/delivery-tasks/{id}/images` | corps brut, `Content-Type` PNG/JPEG, en-tête `X-Filename` |
@@ -210,8 +226,8 @@ Les mutations d'une livraison renvoient la livraison complète (l'UI se re-rend 
   carte de progression, liste des tâches, ajout de tâche.
 - Carte de tâche : bouton rond de validation, titre, statut, poids, estimé, chrono, Démarrer/Pause,
   Valider, menu (modifier, non applicable, monter/descendre, remise à zéro, retirer), replier/déplier.
-  Corps : description, bloc de commande avec bouton Copier, tableau pour Word (Copier pour Word,
-  Télécharger en .docx), captures (miniatures → visionneuse
+  Corps : description, blocs de commande libellés avec bouton Copier chacun, tableaux pour Word
+  (Copier pour Word / .docx par tableau, ou tous), captures (miniatures → visionneuse
   avec flèches/Échap), commentaires (Ctrl+Entrée pour publier, Ctrl+V pour coller une capture).
 - Tâches validées repliées par défaut (dépliables) ; tâches ouvertes dépliées (repliables).
 - Vue modèle : liste ordonnable, ajout/modification/suppression, aide sur les variables,
@@ -245,3 +261,5 @@ description et commandes **résolues**, tableau de liens, commentaires horodaté
 
 - **v1.2 (2026-10-20)** — Compatibilité des bases : migrations transactionnelles, sauvegarde
   automatique avant migration, refus d'une base plus récente, fixtures v1/v2 et tests de compatibilité.
+- **v1.3 (2026-10-20)** — Plusieurs blocs de commande et plusieurs tableaux Word par tâche (E15, E16),
+  schéma v3.

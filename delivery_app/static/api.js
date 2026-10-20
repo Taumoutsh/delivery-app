@@ -55,7 +55,9 @@
     },
 
     exportReport: (id, fmt) => download(`/api/deliveries/${id}/report.${fmt}`, `livraison.${fmt}`),
-    exportTaskTable: (id) => download(`/api/delivery-tasks/${id}/table.docx`, 'tableau.docx'),
+    exportTaskTable: (id, index) => download(
+      index === null || index === undefined ? `/api/delivery-tasks/${id}/tables.docx` : `/api/delivery-tasks/${id}/tables/${index}.docx`,
+      'tableaux.docx'),
   };
 
   async function download(url, fallbackName) {

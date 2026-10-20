@@ -194,6 +194,18 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .cmd .copy.copied { color: #9be3b6; border-color: #9be3b6; }
 .warn-vars { font-size: 12px; color: var(--danger); margin-top: 6px; }
 
+.stack { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.stack > .section-label { margin-bottom: -4px; }
+.cmd-block, .table-block { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cmd-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.table-title { font-weight: 600; font-size: 13px; }
+.table-actions.all { padding-top: 8px; border-top: 1px dashed var(--line); }
+.rep-list { display: flex; flex-direction: column; gap: 8px; }
+.rep-list:empty { display: none; }
+.rep-item { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); }
+.rep-head { display: flex; gap: 4px; align-items: center; }
+.rep-head input { flex: 1; min-width: 0; }
+
 .doc-table-wrap { overflow-x: auto; border-radius: 6px; border: 1px solid var(--line); }
 .doc-table { border-collapse: collapse; width: 100%; font-size: 13px; }
 .doc-table th { background: var(--accent); color: var(--accent-ink); text-align: left; font-weight: 600; padding: 6px 10px; }

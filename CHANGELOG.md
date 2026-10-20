@@ -3,6 +3,15 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.3.0 — 2026-10-20
+
+- Plusieurs lignes de commande par tâche, chacune avec un libellé optionnel (Linux, Build, Rollback…)
+  et son propre bouton Copier ; ordre modifiable.
+- Plusieurs tableaux Word par tâche, chacun avec un titre : copie ou `.docx` d'un tableau, ou de tous
+  les tableaux d'un coup (titres inclus).
+- Format de base v3 : la commande et le tableau existants de chaque tâche sont repris automatiquement
+  (sauvegarde `.bak` créée avant la mise à jour).
+
 ## 1.2.0 — 2026-10-20
 
 - Bases de données : mise à jour automatique sûre (sauvegarde `.bak` préalable, transaction unique,

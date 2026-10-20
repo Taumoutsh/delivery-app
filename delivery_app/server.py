@@ -124,12 +124,23 @@ def export_report(h, delivery_id, fmt):
     h.send_bytes(data, mime, f"livraison_{safe}.{fmt}", attachment=True)
 
 
-@route("GET", r"/api/delivery-tasks/(\d+)/table\.docx")
-def export_task_table(h, task_id):
-    task = found(h.db.get_delivery_task(int(task_id)))
+@route("GET", r"/api/delivery-tasks/(\d+)/tables?\.docx")
+def export_task_tables(h, task_id):
+    """Every link table of the task, each preceded by its title (table.docx kept for v1.2 links)."""
+    send_task_tables(h, int(task_id), None)
+
+
+@route("GET", r"/api/delivery-tasks/(\d+)/tables/(\d+)\.docx")
+def export_task_table(h, task_id, index):
+    send_task_tables(h, int(task_id), int(index))
+
+
+def send_task_tables(h, task_id, index):
+    task = found(h.db.get_delivery_task(task_id))
     delivery = found(h.db.get_delivery(task["delivery_id"]))
-    data = report.build_table_docx(task, delivery)
-    safe = re.sub(r"[^\w.-]+", "_", f"tableau_{task['title'][:40]}_{delivery['version']}")
+    data = report.build_table_docx(task, delivery, index)
+    name = task["title"] if index is None else (task["link_tables"][index]["title"] or task["title"])
+    safe = re.sub(r"[^\w.-]+", "_", f"tableau_{name[:40]}_{delivery['version']}")
     h.send_bytes(data, DOCX_MIME, f"{safe}.docx", attachment=True)
 
 
