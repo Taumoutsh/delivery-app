@@ -169,13 +169,39 @@ def delete_comment(h, comment_id):
     return found(h.db.delete_comment(int(comment_id)))
 
 
-@route("POST", r"/api/delivery-tasks/(\d+)/images")
-def upload_image(h, task_id):
+def uploaded_image(h):
+    """(filename, mime, data) of a raw image upload."""
     mime = (h.headers.get("Content-Type") or "").split(";")[0].strip().lower()
     if mime not in IMAGE_TYPES:
         raise HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Formats acceptés : PNG, JPEG.")
     filename = unquote(h.headers.get("X-Filename") or "image")[:200]
-    return found(h.db.add_image(int(task_id), filename, mime, h.body()))
+    return filename, mime, h.body()
+
+
+@route("POST", r"/api/delivery-tasks/(\d+)/images")
+def upload_image(h, task_id):
+    return found(h.db.add_image(int(task_id), *uploaded_image(h)))
+
+
+@route("POST", r"/api/images/(\d+)/to-template")
+def image_to_template(h, image_id):
+    return found(h.db.image_to_template(int(image_id)))
+
+
+@route("POST", r"/api/tasks/(\d+)/images")
+def upload_template_image(h, task_id):
+    return found(h.db.add_template_image(int(task_id), *uploaded_image(h)))
+
+
+@route("GET", r"/api/template-images/(\d+)")
+def get_template_image(h, image_id):
+    img = found(h.db.get_template_image(int(image_id)))
+    h.send_bytes(img["data"], img["mime"], img["filename"])
+
+
+@route("DELETE", r"/api/template-images/(\d+)")
+def delete_template_image(h, image_id):
+    return found(h.db.delete_template_image(int(image_id)))
 
 
 @route("GET", r"/api/images/(\d+)")

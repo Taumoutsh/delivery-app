@@ -43,22 +43,27 @@
     deleteComment: (id) => del(`/api/comments/${id}`),
     deleteImage: (id) => del(`/api/images/${id}`),
 
-    async uploadImage(taskId, file) {
-      const res = await fetch(`/api/delivery-tasks/${taskId}/images`, {
-        method: 'POST',
-        headers: { 'Content-Type': file.type, 'X-Filename': encodeURIComponent(file.name || 'capture.png') },
-        body: file,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `Erreur ${res.status}`);
-      return data;
-    },
+    uploadImage: (taskId, file) => upload(`/api/delivery-tasks/${taskId}/images`, file),
+    uploadTemplateImage: (taskId, file) => upload(`/api/tasks/${taskId}/images`, file),
+    deleteTemplateImage: (id) => del(`/api/template-images/${id}`),
+    imageToTemplate: (id) => post(`/api/images/${id}/to-template`),
 
     exportReport: (id, fmt) => download(`/api/deliveries/${id}/report.${fmt}`, `livraison.${fmt}`),
     exportTaskTable: (id, index) => download(
       index === null || index === undefined ? `/api/delivery-tasks/${id}/tables.docx` : `/api/delivery-tasks/${id}/tables/${index}.docx`,
       'tableaux.docx'),
   };
+
+  async function upload(url, file) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': file.type, 'X-Filename': encodeURIComponent(file.name || 'capture.png') },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Erreur ${res.status}`);
+    return data;
+  }
 
   async function download(url, fallbackName) {
     const res = await fetch(url);

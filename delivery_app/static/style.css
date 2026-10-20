@@ -222,6 +222,14 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .thumb .x { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border-radius: 50%; border: 0; background: rgba(0,0,0,.6); color: #fff; font-size: 12px; line-height: 20px; cursor: pointer; display: none; padding: 0; }
 .thumb:hover .x, .thumb:focus-within .x { display: block; }
 .thumb-add { width: 92px; height: 70px; border: 1px dashed var(--line); border-radius: 6px; background: none; color: var(--muted); cursor: pointer; font-size: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
+.thumbs.small .thumb, .thumbs.small .thumb-add { width: 64px; height: 48px; font-size: 11px; }
+.thumbs.small { align-items: center; }
+.thumbs.small .thumb-add { width: auto; height: 26px; padding: 0 8px; flex-direction: row; gap: 4px; }
+.thumbs.small .thumb-add .ic { width: 12px; height: 12px; }
+.thumb .to-tpl { position: absolute; left: 3px; bottom: 3px; border: 0; border-radius: 4px; background: rgba(0,0,0,.65); color: #fff; font-size: 10px; padding: 1px 5px; cursor: pointer; display: none; }
+.thumb:hover .to-tpl, .thumb:focus-within .to-tpl { display: block; }
+.tpl-images { margin-top: 6px; }
+.tpl-row:focus { outline: none; background: var(--surface-2); }
 .thumb-add:hover { border-color: var(--accent); color: var(--accent); }
 
 .comments { display: flex; flex-direction: column; gap: 8px; }

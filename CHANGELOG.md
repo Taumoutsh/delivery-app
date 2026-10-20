@@ -3,6 +3,15 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.4.0 — 2026-10-20
+
+- Captures de référence dans le modèle : on ajoute des captures à une tâche du modèle (bouton
+  « Capture de référence » ou Ctrl+V sur la ligne). Chaque nouvelle livraison en reçoit une copie,
+  affichée à part (« Captures de référence du modèle ») et reprise dans les rapports.
+- Depuis une livraison, « → modèle » sur une capture l'ajoute au modèle pour les livraisons suivantes.
+- Supprimer une capture du modèle ne touche pas aux livraisons existantes.
+- Format de base v4 (mise à jour automatique avec sauvegarde `.bak`).
+
 ## 1.3.0 — 2026-10-20
 
 - Plusieurs lignes de commande par tâche, chacune avec un libellé optionnel (Linux, Build, Rollback…)

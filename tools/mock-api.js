@@ -49,11 +49,27 @@
     link_tables: tables.map(([t, spec]) => ({ title: t, spec })),
   }));
 
+  template.forEach((t) => { t.images = []; });
+  template[5].images.push({
+    id: nextId(), filename: 'recette-attendue.png',
+    url: screenshot(['$ curl -s https://recette.example.com/health', '{', '  "status": "UP",', '  "version": "x.y.z",',
+      '  "db": "UP", "cache": "UP"', '}', '', 'Attendu : status UP et la version livrée'], '#7ee2a8'),
+  });
+
+  // Template screenshots are copied as "reference" captures, like the backend does.
   const fromTemplate = (t, extra) => ({
     id: nextId(), template_task_id: t.id, title: t.title, description: t.description,
     commands: clone(t.commands || []), link_tables: clone(t.link_tables || []),
     weight: t.weight, estimated_minutes: t.estimated_minutes, status: 'todo', elapsed_seconds: 0,
-    running_since: null, started_at: null, completed_at: null, comments: [], images: [], ...extra,
+    running_since: null, started_at: null, completed_at: null, comments: [],
+    images: (t.images || []).map((img) => ({ ...img, id: nextId(), reference: true })), ...extra,
+  });
+
+  const readDataUrl = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Lecture de l'image impossible."));
+    reader.readAsDataURL(file);
   });
 
   const deliveries = [];
@@ -130,7 +146,27 @@
     saveSettings: (data) => { settings.default_variables = { ...data.default_variables }; return ok(clone(settings)); },
 
     listTasks: () => ok(clone(template)),
-    createTask: (data) => { const t = { id: nextId(), position: template.length, ...fields(data) }; template.push(t); return ok(clone(t)); },
+    createTask: (data) => { const t = { id: nextId(), position: template.length, images: [], ...fields(data) }; template.push(t); return ok(clone(t)); },
+    uploadTemplateImage: async (taskId, file) => {
+      const t = template.find((x) => x.id === taskId);
+      t.images.push({ id: nextId(), filename: file.name || 'capture.png', url: await readDataUrl(file) });
+      return clone(template);
+    },
+    deleteTemplateImage: (id) => {
+      for (const t of template) t.images = t.images.filter((img) => img.id !== id);
+      return ok(clone(template));
+    },
+    imageToTemplate: (id) => {
+      for (const d of deliveries) for (const t of d.tasks) {
+        const img = t.images.find((x) => x.id === id);
+        const tpl = img && template.find((x) => x.id === t.template_task_id);
+        if (!img) continue;
+        if (!tpl) return Promise.reject(new Error('Cette tâche ne provient pas du modèle.'));
+        tpl.images.push({ id: nextId(), filename: img.filename, url: img.url });
+        return ok(full(d));
+      }
+      return Promise.reject(new Error('Image introuvable.'));
+    },
     updateTask: (id, data) => { const t = template.find((x) => x.id === id); Object.assign(t, fields({ ...t, ...data })); return ok(clone(t)); },
     deleteTask: (id) => { template.splice(template.findIndex((x) => x.id === id), 1); return ok({ ok: true }); },
     reorderTasks: (ids) => { template.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)); return ok(clone(template)); },
@@ -163,7 +199,7 @@
     addDeliveryTask: (id, data) => {
       const d = findD(id);
       let tplId = null;
-      if (data.add_to_template) { const t = { id: nextId(), position: template.length, ...fields(data) }; template.push(t); tplId = t.id; }
+      if (data.add_to_template) { const t = { id: nextId(), position: template.length, images: [], ...fields(data) }; template.push(t); tplId = t.id; }
       d.tasks.push(fromTemplate({ ...fields(data), id: tplId }));
       return ok(full(d));
     },
@@ -202,16 +238,11 @@
       }
       return Promise.reject(new Error('Image introuvable.'));
     },
-    uploadImage: (taskId, file) => new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const [d, t] = findT(taskId);
-        t.images.push({ id: nextId(), filename: file.name || 'capture.png', url: reader.result });
-        resolve(full(d));
-      };
-      reader.onerror = () => reject(new Error("Lecture de l'image impossible."));
-      reader.readAsDataURL(file);
-    }),
+    uploadImage: async (taskId, file) => {
+      const [d, t] = findT(taskId);
+      t.images.push({ id: nextId(), filename: file.name || 'capture.png', url: await readDataUrl(file), reference: false });
+      return full(d);
+    },
     exportTaskTable: () => Promise.reject(new Error(
       "Démo : le .docx est généré par le serveur Python de l'app locale. « Copier pour Word » fonctionne ici.")),
     exportReport: (id, fmt) => Promise.reject(new Error(

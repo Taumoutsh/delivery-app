@@ -342,6 +342,25 @@
       </div>`;
   }
 
+  // Thumbnails of one task. scope: 'task' (delivery task) or 'tpl' (template task).
+  function thumbStrip(scope, ownerId, images, { canAdd = true, toTemplate = false, small = false, addLabel = 'Ajouter' } = {}) {
+    return `<div class="thumbs${small ? ' small' : ''}">
+      ${images.map((img) => `
+        <div class="thumb" role="button" tabindex="0" data-act="lightbox" data-scope="${scope}" data-owner="${ownerId}" data-img="${img.id}" title="${esc(img.filename)}">
+          <img src="${esc(img.url)}" alt="${esc(img.filename)}" loading="lazy">
+          <button class="x" data-act="delete-image" data-scope="${scope}" data-id="${img.id}" aria-label="Supprimer l'image">✕</button>
+          ${toTemplate ? `<button class="to-tpl" data-act="image-to-template" data-id="${img.id}" title="Ajouter au modèle : les prochaines livraisons la recevront">→ modèle</button>` : ''}
+        </div>`).join('')}
+      ${canAdd ? `<button class="thumb-add" data-act="add-image" data-scope="${scope}" data-id="${ownerId}">${ICONS.plus}<span>${esc(addLabel)}</span></button>
+      <input type="file" accept="image/*" multiple hidden data-upload="${scope}:${ownerId}">` : ''}
+    </div>`;
+  }
+
+  function imagesOf(scope, ownerId) {
+    const list = scope === 'tpl' ? state.templateTasks : state.delivery.tasks;
+    return list.find((t) => t.id === ownerId)?.images || [];
+  }
+
   function renderTask(t, i, vars) {
     const open = isOpen(t);
     const est = t.estimated_minutes;
@@ -353,6 +372,8 @@
     const validate = finished(t) ? '' :
       `<button class="btn ok" data-act="task" data-action="done" data-id="${t.id}">${ICONS.check}Valider</button>`;
 
+    const refImages = t.images.filter((img) => img.reference);
+    const ownImages = t.images.filter((img) => !img.reference);
     const missing = missingVars(t.commands.map((c) => `${c.label}\n${c.text}`).join('\n'), vars);
     const tables = t.link_tables.map((tb) => ({ title: renderText(tb.title, vars), table: parseTable(tb.spec, vars) }))
       .filter((tb) => tb.table);
@@ -390,17 +411,13 @@
           </div>` : ''}
           ${warn(missingTbl, true)}
         </div>` : ''}
+        ${refImages.length ? `<div>
+          <div class="section-label">Captures de référence du modèle (${refImages.length})</div>
+          ${thumbStrip('task', t.id, refImages, { canAdd: false })}
+        </div>` : ''}
         <div>
-          <div class="section-label">Captures (${t.images.length})</div>
-          <div class="thumbs">
-            ${t.images.map((img) => `
-              <div class="thumb" role="button" tabindex="0" data-act="lightbox" data-task="${t.id}" data-img="${img.id}" title="${esc(img.filename)}">
-                <img src="${esc(img.url)}" alt="${esc(img.filename)}" loading="lazy">
-                <button class="x" data-act="delete-image" data-id="${img.id}" aria-label="Supprimer l'image">✕</button>
-              </div>`).join('')}
-            <button class="thumb-add" data-act="add-image" data-id="${t.id}">${ICONS.plus}<span>Ajouter</span></button>
-            <input type="file" accept="image/*" multiple hidden data-upload="${t.id}">
-          </div>
+          <div class="section-label">Captures (${ownImages.length})</div>
+          ${thumbStrip('task', t.id, ownImages, { toTemplate: Boolean(t.template_task_id) })}
         </div>
         <div>
           <div class="section-label">Commentaires (${t.comments.length})</div>
@@ -457,11 +474,12 @@
     const totalW = tasks.reduce((a, t) => a + t.weight, 0);
     const totalE = tasks.reduce((a, t) => a + t.estimated_minutes, 0);
     const rows = tasks.map((t, i) => `
-      <div class="tpl-row">
+      <div class="tpl-row" data-tpl-id="${t.id}" tabindex="-1">
         <span class="tpl-idx">${i + 1}</span>
         <div class="tpl-main">
           <strong>${esc(t.title)}</strong>
           <div class="tpl-cmd">${t.commands.length ? esc(t.commands[0].text.split('\n')[0]) : '<i>pas de commande</i>'}${t.commands.length > 1 ? ` <span class="tpl-tag">+${t.commands.length - 1} commande${t.commands.length > 2 ? 's' : ''}</span>` : ''}${t.link_tables.length ? ` · <span class="tpl-tag">${t.link_tables.length} tableau${t.link_tables.length > 1 ? 'x' : ''} Word</span>` : ''}</div>
+          <div class="tpl-images">${thumbStrip('tpl', t.id, t.images, { small: true, addLabel: 'Capture de référence' })}</div>
         </div>
         <div class="tpl-nums num"><span>Poids ${t.weight}</span><span>${t.estimated_minutes ? fmtDur(t.estimated_minutes * 60) : '—'}</span></div>
         <div class="tpl-btns">
@@ -682,8 +700,8 @@
 
   // ---------------------------------------------------------------- lightbox
 
-  function lightbox(taskId, imgId) {
-    const task = state.delivery.tasks.find((t) => t.id === taskId);
+  function lightbox(images, imgId) {
+    const task = { images };
     let idx = task.images.findIndex((i) => i.id === imgId);
     const el = document.createElement('div');
     el.className = 'lightbox';
@@ -738,12 +756,18 @@
     }
   }
 
-  async function uploadFiles(taskId, files) {
+  async function uploadFiles(scope, ownerId, files) {
     const images = [...files].filter((f) => f.type.startsWith('image/'));
     if (!images.length) return;
-    let d;
-    for (const f of images) d = await run(toPngOrJpeg(f).then((png) => API.uploadImage(taskId, png)));
-    await setDelivery(d);
+    const upload = scope === 'tpl' ? API.uploadTemplateImage : API.uploadImage;
+    let res;
+    for (const f of images) res = await run(toPngOrJpeg(f).then((png) => upload(ownerId, png)));
+    if (scope === 'tpl') {
+      state.templateTasks = res;
+      render();
+    } else {
+      await setDelivery(res);
+    }
     toast(images.length > 1 ? `${images.length} images ajoutées` : 'Image ajoutée');
   }
 
@@ -845,11 +869,21 @@
       if (!(await confirmBox('Supprimer ce commentaire ?'))) return;
       await setDelivery(await run(API.deleteComment(Number(el.dataset.id))));
     },
-    'add-image': (el) => document.querySelector(`[data-upload="${el.dataset.id}"]`).click(),
-    lightbox: (el) => lightbox(Number(el.dataset.task), Number(el.dataset.img)),
+    'add-image': (el) => document.querySelector(`[data-upload="${el.dataset.scope}:${el.dataset.id}"]`).click(),
+    lightbox: (el) => lightbox(imagesOf(el.dataset.scope, Number(el.dataset.owner)), Number(el.dataset.img)),
     async 'delete-image'(el) {
+      if (el.dataset.scope === 'tpl') {
+        if (!(await confirmBox("Supprimer cette capture du modèle ? Les livraisons existantes gardent leur copie."))) return;
+        state.templateTasks = await run(API.deleteTemplateImage(Number(el.dataset.id)));
+        render();
+        return;
+      }
       if (!(await confirmBox("Supprimer cette image ?"))) return;
       await setDelivery(await run(API.deleteImage(Number(el.dataset.id))));
+    },
+    async 'image-to-template'(el) {
+      await setDelivery(await run(API.imageToTemplate(Number(el.dataset.id)),
+        'Capture ajoutée au modèle : les prochaines livraisons la recevront'));
     },
     'edit-task': (el) => {
       const t = state.delivery.tasks.find((x) => x.id === Number(el.dataset.id));
@@ -961,7 +995,7 @@
     const thumb = e.target.closest?.('.thumb');
     if (thumb && (e.key === 'Enter' || e.key === ' ') && e.target === thumb) {
       e.preventDefault();
-      lightbox(Number(thumb.dataset.task), Number(thumb.dataset.img));
+      lightbox(imagesOf(thumb.dataset.scope, Number(thumb.dataset.owner)), Number(thumb.dataset.img));
     }
     if (e.target.dataset?.comment && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -977,17 +1011,21 @@
   });
 
   document.addEventListener('change', (e) => {
-    const id = e.target.dataset?.upload;
-    if (id) uploadFiles(Number(id), e.target.files).catch(() => {});
+    const target = e.target.dataset?.upload;
+    if (target) {
+      const [scope, id] = target.split(':');
+      uploadFiles(scope, Number(id), e.target.files).catch(() => {});
+    }
   });
 
-  // Paste a screenshot while focused inside a task to attach it.
+  // Paste a screenshot while focused inside a task (delivery or template) to attach it.
   document.addEventListener('paste', (e) => {
-    const card = e.target.closest?.('[data-task-id]');
+    const card = e.target.closest?.('[data-task-id], [data-tpl-id]');
     const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
     if (!card || !files.length) return;
     e.preventDefault();
-    uploadFiles(Number(card.dataset.taskId), files).catch(() => {});
+    const tpl = card.dataset.tplId;
+    uploadFiles(tpl ? 'tpl' : 'task', Number(tpl || card.dataset.taskId), files).catch(() => {});
   });
 
   // ---------------------------------------------------------------- boot
