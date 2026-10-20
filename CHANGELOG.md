@@ -3,6 +3,11 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.5.1 — 2026-10-20
+
+- Correctif : dans la fenêtre de modification d'une tâche, seul le contenu défile désormais ; le titre
+  et les boutons Annuler / Enregistrer restent visibles et la page derrière ne bouge plus.
+
 ## 1.5.0 — 2026-10-20
 
 - **Éléments de tâche** : une tâche contient une liste d'éléments, tous facultatifs, ajoutés et

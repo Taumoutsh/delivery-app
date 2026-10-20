@@ -553,7 +553,12 @@
         </footer>
       </form>`;
     const form = overlay.querySelector('form');
-    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); onClose?.(); };
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+      if (!document.querySelector('.overlay')) document.documentElement.classList.remove('modal-open');
+      onClose?.();
+    };
     const onKey = (e) => { if (e.key === 'Escape' && !document.querySelector('.lightbox')) close(); };
     document.addEventListener('keydown', onKey);
     overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
@@ -571,6 +576,7 @@
       }
     });
     document.body.appendChild(overlay);
+    document.documentElement.classList.add('modal-open'); // lock the page behind the dialog
     if (onInput) onInput(form);
     form.querySelector('input:not([type=checkbox]), textarea')?.focus();
     return form;
