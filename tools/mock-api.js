@@ -1,5 +1,5 @@
 // In-memory stand-in for api.js, used only by the standalone demo (tools/build_demo.py).
-// Mirrors the backend rules in delivery_app/db.py on example data.
+// Mirrors the backend rules on example data.
 (function () {
   const iso = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
   const ago = (min) => iso(new Date(Date.now() - min * 60000));
@@ -19,56 +19,72 @@
     lines.forEach((l, i) => { g.fillStyle = i === lines.length - 1 ? color : '#c9d6df'; g.fillText(l, 18, 62 + i * 24); });
     return c.toDataURL('image/png');
   }
+  const media = (filename, url, mime = 'image/png') => ({ id: `m${nextId()}`, filename, mime, url });
 
-  const settings = { default_variables: { prev_version: '', registry: 'registry.local' } };
+  const settings = { default_variables: { prev_version: '', registry: 'registry.local', env: 'recette' } };
 
-  // [title, description, [[label, command]], weight, minutes, [[table title, table spec]]]
+  // Block helpers (same shapes as blocks.js).
+  const B = {
+    command: (label, text) => ({ type: 'command', label, text }),
+    link: (label, url) => ({ type: 'link', label, url }),
+    program: (name, path, args = '', cwd = '') => ({ type: 'program', name, path, args, cwd }),
+    table: (title, spec) => ({ type: 'table', title, spec }),
+    media: (title, files) => ({ type: 'media', title, files }),
+    note: (text) => ({ type: 'note', text }),
+  };
+
+  // [title, description, estimated minutes, blocks]
   const template = [
-    ['Mettre à jour le numéro de version', 'Mettre à jour le fichier VERSION et le changelog avant de créer la branche.',
-      [['', 'git checkout develop && git pull\necho "{{version}}" > VERSION\ngit commit -am "chore: bump version to {{version}}"']], 2, 10],
-    ['Créer la branche de release', 'La branche part de develop à jour.',
-      [['', 'git checkout -b release/{{version}}\ngit push -u origin release/{{version}}']], 1, 5],
-    ['Lancer la suite de tests', 'Tous les tests doivent passer. Joindre une capture du rapport.',
-      [['Tests', 'make test'], ['Qualité', 'make lint']], 3, 30],
-    ['Construire les artefacts', "Build de l'image Docker et du paquet pour la version {{version}}.",
-      [['Image Docker', 'docker build -t {{registry}}/app:{{version}} .\ndocker push {{registry}}/app:{{version}}'],
-        ['Paquet', 'make package VERSION={{version}}']], 3, 20],
-    ['Tagger la version', 'Tag annoté, comparé à la version précédente {{prev_version}}.',
-      [['Créer le tag', 'git tag -a v{{version}} -m "Release {{version}}"\ngit push origin v{{version}}'],
-        ['Changements depuis {{prev_version}}', 'git log --oneline v{{prev_version}}..v{{version}}']], 1, 5],
-    ['Déployer en recette', 'Vérifier les logs après déploiement.',
-      [['Linux', './deploy.sh --env {{env}} --version {{version}}'], ['Windows', '.\\deploy.ps1 -Env {{env}} -Version {{version}}']], 3, 25],
-    ['Rédiger les notes de version', "Résumé des changements depuis {{prev_version}}, à envoyer à l'équipe. Les tableaux se collent directement dans le document de livraison.",
-      [], 2, 20, [
-        ['Liens de la livraison', 'Élément | Lien\nNotes de version {{version}} | [Wiki — release {{version}}](https://wiki.example.com/releases/{{version}})\nTag Git | [v{{version}}](https://git.example.com/app/-/tags/v{{version}})\nComparaison | [v{{prev_version}}...v{{version}}](https://git.example.com/app/-/compare/v{{prev_version}}...v{{version}})'],
-        ['Livrables', 'Livrable | Emplacement\nImage Docker | [{{registry}}/app:{{version}}](https://{{registry}}/harbor/projects/app/tags/{{version}})\nPaquet | [app-{{version}}.tar.gz](https://artifacts.example.com/app/{{version}}/app-{{version}}.tar.gz)'],
-      ]],
-  ].map(([title, description, commands, weight, estimated_minutes, tables = []], i) => ({
-    id: i + 1, position: i, title, description, weight, estimated_minutes,
-    commands: commands.map(([label, text]) => ({ label, text })),
-    link_tables: tables.map(([t, spec]) => ({ title: t, spec })),
+    ['Mettre à jour le numéro de version', 'Mettre à jour le fichier VERSION et le changelog avant de créer la branche.', 10, [
+      B.command('', 'git checkout develop && git pull\necho "{{version}}" > VERSION\ngit commit -am "chore: bump version to {{version}}"'),
+      B.link('Changelog à compléter', 'https://git.example.com/app/-/blob/develop/CHANGELOG.md'),
+    ]],
+    ['Créer la branche de release', 'La branche part de develop à jour.', 5, [
+      B.command('', 'git checkout -b release/{{version}}\ngit push -u origin release/{{version}}'),
+    ]],
+    ['Lancer la suite de tests', 'Tous les tests doivent passer. Joindre une capture du rapport.', 30, [
+      B.command('Tests', 'make test'),
+      B.command('Qualité', 'make lint'),
+      B.link('Pipeline de la branche', 'https://ci.example.com/app/-/pipelines?ref=release/{{version}}'),
+    ]],
+    ['Construire les artefacts', "Build de l'image Docker et du paquet pour la version {{version}}.", 20, [
+      B.command('Image Docker', 'docker build -t {{registry}}/app:{{version}} .\ndocker push {{registry}}/app:{{version}}'),
+      B.command('Paquet', 'make package VERSION={{version}}'),
+    ]],
+    ['Tagger la version', 'Tag annoté, comparé à la version précédente {{prev_version}}.', 5, [
+      B.command('Créer le tag', 'git tag -a v{{version}} -m "Release {{version}}"\ngit push origin v{{version}}'),
+      B.command('Changements depuis {{prev_version}}', 'git log --oneline v{{prev_version}}..v{{version}}'),
+    ]],
+    ['Déployer en recette', 'Déployer puis vérifier que la recette répond avec la bonne version.', 25, [
+      B.note("Prévenir l'équipe support sur le canal #recette avant de lancer le déploiement de {{version}}."),
+      B.program('Console de déploiement', 'C:\\Outils\\Deploy\\deploy-console.exe', '--env {{env}} --version {{version}}', 'C:\\Outils\\Deploy'),
+      B.command('Linux', './deploy.sh --env {{env}} --version {{version}}'),
+      B.command('Windows', '.\\deploy.ps1 -Env {{env}} -Version {{version}}'),
+      B.link('Santé de la recette', 'https://{{env}}.example.com/health'),
+      B.media('Écran attendu', [media('recette-attendue.png', screenshot(['$ curl -s https://recette.example.com/health', '{', '  "status": "UP",',
+        '  "version": "x.y.z",', '  "db": "UP", "cache": "UP"', '}', '', 'Attendu : status UP et la version livrée'], '#7ee2a8'))]),
+    ]],
+    ['Rédiger les notes de version', "Résumé des changements depuis {{prev_version}}, à envoyer à l'équipe.", 20, [
+      B.table('Liens de la livraison', 'Élément | Lien\nNotes de version {{version}} | [Wiki — release {{version}}](https://wiki.example.com/releases/{{version}})\nTag Git | [v{{version}}](https://git.example.com/app/-/tags/v{{version}})\nComparaison | [v{{prev_version}}...v{{version}}](https://git.example.com/app/-/compare/v{{prev_version}}...v{{version}})'),
+      B.table('Livrables', 'Livrable | Emplacement\nImage Docker | [{{registry}}/app:{{version}}](https://{{registry}}/harbor/projects/app/tags/{{version}})\nPaquet | [app-{{version}}.tar.gz](https://artifacts.example.com/app/{{version}}/app-{{version}}.tar.gz)'),
+      B.program('Modèle de notes (Word)', 'C:\\Modeles\\notes-de-version.dotx'),
+    ]],
+  ].map(([title, description, estimated_minutes, blocks], i) => ({
+    id: i + 1, position: i, title, description, estimated_minutes,
+    blocks: blocks.map((b) => ({ id: `b${nextId()}`, ...b })),
   }));
 
-  template.forEach((t) => { t.images = []; });
-  template[5].images.push({
-    id: nextId(), filename: 'recette-attendue.png',
-    url: screenshot(['$ curl -s https://recette.example.com/health', '{', '  "status": "UP",', '  "version": "x.y.z",',
-      '  "db": "UP", "cache": "UP"', '}', '', 'Attendu : status UP et la version livrée'], '#7ee2a8'),
-  });
-
-  // Template screenshots are copied as "reference" captures, like the backend does.
+  // Copies, not links: a delivery keeps its own blocks and media.
   const fromTemplate = (t, extra) => ({
     id: nextId(), template_task_id: t.id, title: t.title, description: t.description,
-    commands: clone(t.commands || []), link_tables: clone(t.link_tables || []),
-    weight: t.weight, estimated_minutes: t.estimated_minutes, status: 'todo', elapsed_seconds: 0,
-    running_since: null, started_at: null, completed_at: null, comments: [],
-    images: (t.images || []).map((img) => ({ ...img, id: nextId(), reference: true })), ...extra,
+    estimated_minutes: t.estimated_minutes, blocks: clone(t.blocks || []), status: 'todo', elapsed_seconds: 0,
+    running_since: null, started_at: null, completed_at: null, comments: [], images: [], ...extra,
   });
 
   const readDataUrl = (file) => new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error("Lecture de l'image impossible."));
+    reader.onerror = () => reject(new Error('Lecture du fichier impossible.'));
     reader.readAsDataURL(file);
   });
 
@@ -111,15 +127,17 @@
   }
   seed();
 
+  // Progress weighted by estimated time; a task without estimate weighs 1 minute.
+  const weight = (t) => Math.max(1, t.estimated_minutes || 0);
+  function progress(tasks) {
+    const total = tasks.filter((t) => t.status !== 'skipped').reduce((a, t) => a + weight(t), 0);
+    const done = tasks.filter((t) => t.status === 'done').reduce((a, t) => a + weight(t), 0);
+    return total ? Math.round((100 * done) / total) : 0;
+  }
   function elapsedNow(t) {
     let s = t.elapsed_seconds;
     if (t.status === 'running' && t.running_since) s += Math.floor((Date.now() - Date.parse(t.running_since)) / 1000);
     return s;
-  }
-  function progress(tasks) {
-    const total = tasks.filter((t) => t.status !== 'skipped').reduce((a, t) => a + t.weight, 0);
-    const done = tasks.filter((t) => t.status === 'done').reduce((a, t) => a + t.weight, 0);
-    return total ? Math.round((100 * done) / total) : 0;
   }
   const full = (d) => clone({ ...d, progress: progress(d.tasks) });
   const findD = (id) => { const d = deliveries.find((x) => x.id === id); if (!d) throw new Error('Livraison introuvable.'); return d; };
@@ -131,11 +149,8 @@
     if (!String(data.title || '').trim()) throw new Error('Le titre est obligatoire.');
     return {
       title: data.title.trim(), description: data.description || '',
-      commands: (data.commands || []).filter((c) => String(c.text || '').trim())
-        .map((c) => ({ label: String(c.label || '').trim(), text: String(c.text) })),
-      link_tables: (data.link_tables || []).filter((tb) => String(tb.spec || '').trim())
-        .map((tb) => ({ title: String(tb.title || '').trim(), spec: String(tb.spec) })),
-      weight: Math.max(0, Number(data.weight) || 0), estimated_minutes: Math.max(0, Number(data.estimated_minutes) || 0),
+      estimated_minutes: Math.max(0, Number(data.estimated_minutes) || 0),
+      blocks: clone(data.blocks || []),
     };
   };
   const ok = (v) => new Promise((r) => setTimeout(() => r(v), 60));
@@ -146,30 +161,11 @@
     saveSettings: (data) => { settings.default_variables = { ...data.default_variables }; return ok(clone(settings)); },
 
     listTasks: () => ok(clone(template)),
-    createTask: (data) => { const t = { id: nextId(), position: template.length, images: [], ...fields(data) }; template.push(t); return ok(clone(t)); },
-    uploadTemplateImage: async (taskId, file) => {
-      const t = template.find((x) => x.id === taskId);
-      t.images.push({ id: nextId(), filename: file.name || 'capture.png', url: await readDataUrl(file) });
-      return clone(template);
-    },
-    deleteTemplateImage: (id) => {
-      for (const t of template) t.images = t.images.filter((img) => img.id !== id);
-      return ok(clone(template));
-    },
-    imageToTemplate: (id) => {
-      for (const d of deliveries) for (const t of d.tasks) {
-        const img = t.images.find((x) => x.id === id);
-        const tpl = img && template.find((x) => x.id === t.template_task_id);
-        if (!img) continue;
-        if (!tpl) return Promise.reject(new Error('Cette tâche ne provient pas du modèle.'));
-        tpl.images.push({ id: nextId(), filename: img.filename, url: img.url });
-        return ok(full(d));
-      }
-      return Promise.reject(new Error('Image introuvable.'));
-    },
+    createTask: (data) => { const t = { id: nextId(), position: template.length, ...fields(data) }; template.push(t); return ok(clone(t)); },
     updateTask: (id, data) => { const t = template.find((x) => x.id === id); Object.assign(t, fields({ ...t, ...data })); return ok(clone(t)); },
     deleteTask: (id) => { template.splice(template.findIndex((x) => x.id === id), 1); return ok({ ok: true }); },
     reorderTasks: (ids) => { template.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)); return ok(clone(template)); },
+    uploadMedia: async (file) => media(file.name || 'fichier', await readDataUrl(file), file.type),
 
     listDeliveries: () => ok([...deliveries].sort((a, b) => b.created_at.localeCompare(a.created_at)).map((d) => ({
       id: d.id, version: d.version, name: d.name, status: d.status, created_at: d.created_at,
@@ -199,7 +195,7 @@
     addDeliveryTask: (id, data) => {
       const d = findD(id);
       let tplId = null;
-      if (data.add_to_template) { const t = { id: nextId(), position: template.length, images: [], ...fields(data) }; template.push(t); tplId = t.id; }
+      if (data.add_to_template) { const t = { id: nextId(), position: template.length, ...fields(data) }; template.push(t); tplId = t.id; }
       d.tasks.push(fromTemplate({ ...fields(data), id: tplId }));
       return ok(full(d));
     },
@@ -240,8 +236,27 @@
     },
     uploadImage: async (taskId, file) => {
       const [d, t] = findT(taskId);
-      t.images.push({ id: nextId(), filename: file.name || 'capture.png', url: await readDataUrl(file), reference: false });
+      t.images.push({ id: nextId(), filename: file.name || 'capture.png', url: await readDataUrl(file) });
       return full(d);
+    },
+    // A delivery screenshot joins the "Images et vidéos" element of its template task (created if needed).
+    imageToTemplate: (id) => {
+      for (const d of deliveries) for (const t of d.tasks) {
+        const img = t.images.find((x) => x.id === id);
+        if (!img) continue;
+        const tpl = template.find((x) => x.id === t.template_task_id);
+        if (!tpl) return Promise.reject(new Error('Cette tâche ne provient pas du modèle.'));
+        let block = tpl.blocks.find((b) => b.type === 'media');
+        if (!block) { block = { id: `b${nextId()}`, ...B.media('Captures de référence', []) }; tpl.blocks.push(block); }
+        block.files.push(media(img.filename, img.url));
+        return ok(full(d));
+      }
+      return Promise.reject(new Error('Image introuvable.'));
+    },
+    launchProgram: (taskId, blockId) => {
+      const [d, t] = findT(taskId);
+      const b = t.blocks.find((x) => x.id === blockId);
+      return ok({ message: `Démo : dans l'application locale, « ${b.name || b.path} » serait lancé sur votre poste.` });
     },
     exportTaskTable: () => Promise.reject(new Error(
       "Démo : le .docx est généré par le serveur Python de l'app locale. « Copier pour Word » fonctionne ici.")),

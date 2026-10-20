@@ -26,6 +26,7 @@ def build():
     css = inline_fonts() + "\n" + (STATIC / "style.css").read_text(encoding="utf-8")
     mock = (ROOT / "tools" / "mock-api.js").read_text(encoding="utf-8")
     app = (STATIC / "app.js").read_text(encoding="utf-8")
+    blocks = (STATIC / "blocks.js").read_text(encoding="utf-8")
     return f"""<title>Checklist Livraison</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
@@ -34,6 +35,9 @@ def build():
 <div id="app" class="app"></div>
 <script>
 {mock}
+</script>
+<script>
+{blocks}
 </script>
 <script>
 {app}
