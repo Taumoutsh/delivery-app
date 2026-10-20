@@ -10,11 +10,17 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, unquote, urlparse
 
-from . import __version__, report
+from . import __version__, launcher, report
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-MAX_UPLOAD = 15 * 1024 * 1024
-IMAGE_TYPES = {"image/png", "image/jpeg"}  # the UI converts GIF/WebP to PNG before upload
+MAX_IMAGE = 15 * 1024 * 1024
+MAX_VIDEO = 200 * 1024 * 1024
+MAX_JSON = 2 * 1024 * 1024
+IMAGE_TYPES = {"image/png", "image/jpeg"}  # the UI converts GIF/WebP/BMP to PNG before upload
+VIDEO_TYPES = {"video/mp4", "video/webm", "video/ogg", "video/quicktime"}
+# Header every API call of the UI sends. A web page from another site cannot add it without a CORS
+# preflight, which this server never grants: it protects state changes and program launches.
+CSRF_HEADER = "X-Checklist"
 
 ROUTES = []
 
@@ -126,22 +132,36 @@ def export_report(h, delivery_id, fmt):
 
 @route("GET", r"/api/delivery-tasks/(\d+)/tables?\.docx")
 def export_task_tables(h, task_id):
-    """Every link table of the task, each preceded by its title (table.docx kept for v1.2 links)."""
+    """Every Word table of the task, each preceded by its title (table.docx kept for v1.2 links)."""
     send_task_tables(h, int(task_id), None)
 
 
-@route("GET", r"/api/delivery-tasks/(\d+)/tables/(\d+)\.docx")
-def export_task_table(h, task_id, index):
-    send_task_tables(h, int(task_id), int(index))
+@route("GET", r"/api/delivery-tasks/(\d+)/tables/([\w-]+)\.docx")
+def export_task_table(h, task_id, block_id):
+    send_task_tables(h, int(task_id), block_id)
 
 
-def send_task_tables(h, task_id, index):
+def send_task_tables(h, task_id, block_id):
     task = found(h.db.get_delivery_task(task_id))
     delivery = found(h.db.get_delivery(task["delivery_id"]))
-    data = report.build_table_docx(task, delivery, index)
-    name = task["title"] if index is None else (task["link_tables"][index]["title"] or task["title"])
+    data = report.build_table_docx(task, delivery, block_id)
+    block = next((b for b in task["blocks"] if b["id"] == block_id), None)
+    name = (block and block.get("title")) or task["title"]
     safe = re.sub(r"[^\w.-]+", "_", f"tableau_{name[:40]}_{delivery['version']}")
     h.send_bytes(data, DOCX_MIME, f"{safe}.docx", attachment=True)
+
+
+@route("POST", r"/api/delivery-tasks/(\d+)/blocks/([\w-]+)/launch")
+def launch_program(h, task_id, block_id):
+    if not h.allow_launch:
+        raise HttpError(HTTPStatus.FORBIDDEN, "Le lancement de programmes est désactivé (option --no-launch).")
+    program = found(h.db.program_of(int(task_id), block_id))
+    try:
+        started = launcher.launch(program)
+    except launcher.LaunchError as exc:
+        raise HttpError(HTTPStatus.UNPROCESSABLE_ENTITY, str(exc))
+    sys.stderr.write(f"Programme lancé : {started}\n")
+    return {"message": f"« {program['name'] or program['path']} » lancé."}
 
 
 @route("PUT", r"/api/delivery-tasks/(\d+)")
@@ -169,18 +189,21 @@ def delete_comment(h, comment_id):
     return found(h.db.delete_comment(int(comment_id)))
 
 
-def uploaded_image(h):
-    """(filename, mime, data) of a raw image upload."""
+def uploaded_file(h, allowed, limit):
+    """(filename, mime, data) of a raw file upload."""
     mime = (h.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-    if mime not in IMAGE_TYPES:
-        raise HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Formats acceptés : PNG, JPEG.")
-    filename = unquote(h.headers.get("X-Filename") or "image")[:200]
-    return filename, mime, h.body()
+    if mime not in allowed:
+        raise HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                        "Formats acceptés : PNG, JPEG" + (", MP4, WebM, Ogg, MOV." if VIDEO_TYPES & allowed else "."))
+    if mime in VIDEO_TYPES:
+        limit = MAX_VIDEO
+    filename = unquote(h.headers.get("X-Filename") or "fichier")[:200]
+    return filename, mime, h.body(limit)
 
 
 @route("POST", r"/api/delivery-tasks/(\d+)/images")
 def upload_image(h, task_id):
-    return found(h.db.add_image(int(task_id), *uploaded_image(h)))
+    return found(h.db.add_image(int(task_id), *uploaded_file(h, IMAGE_TYPES, MAX_IMAGE)))
 
 
 @route("POST", r"/api/images/(\d+)/to-template")
@@ -188,20 +211,16 @@ def image_to_template(h, image_id):
     return found(h.db.image_to_template(int(image_id)))
 
 
-@route("POST", r"/api/tasks/(\d+)/images")
-def upload_template_image(h, task_id):
-    return found(h.db.add_template_image(int(task_id), *uploaded_image(h)))
+@route("POST", r"/api/media")
+def upload_media(h):
+    """File of a media block (image or video), attached when the task is saved."""
+    return h.db.add_media(*uploaded_file(h, IMAGE_TYPES | VIDEO_TYPES, MAX_IMAGE))
 
 
-@route("GET", r"/api/template-images/(\d+)")
-def get_template_image(h, image_id):
-    img = found(h.db.get_template_image(int(image_id)))
-    h.send_bytes(img["data"], img["mime"], img["filename"])
-
-
-@route("DELETE", r"/api/template-images/(\d+)")
-def delete_template_image(h, image_id):
-    return found(h.db.delete_template_image(int(image_id)))
+@route("GET", r"/api/media/(\d+)")
+def get_media(h, media_id):
+    item = found(h.db.get_media(int(media_id)))
+    h.send_bytes(item["data"], item["mime"], item["filename"], ranges=True)
 
 
 @route("GET", r"/api/images/(\d+)")
@@ -219,16 +238,19 @@ def delete_image(h, image_id):
 
 class Handler(BaseHTTPRequestHandler):
     db = None  # injected by make_server
+    allow_launch = True
+    allowed_hosts = frozenset()
     server_version = f"DeliveryChecklist/{__version__}"
 
     def log_message(self, fmt, *args):
         if "/api/" in (args[0] if args else ""):
             sys.stderr.write("%s %s\n" % (self.log_date_time_string(), fmt % args))
 
-    def body(self):
+    def body(self, limit=MAX_JSON):
         length = int(self.headers.get("Content-Length") or 0)
-        if length > MAX_UPLOAD:
-            raise HttpError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Fichier trop volumineux (15 Mo max).")
+        if length > limit:
+            raise HttpError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                            f"Fichier trop volumineux ({limit // (1024 * 1024)} Mo maximum).")
         return self.rfile.read(length) if length else b""
 
     def json(self):
@@ -238,15 +260,44 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             raise HttpError(HTTPStatus.BAD_REQUEST, "JSON invalide.")
 
-    def send_bytes(self, data, mime, filename=None, attachment=False):
-        self.send_response(HTTPStatus.OK)
+    def send_bytes(self, data, mime, filename=None, attachment=False, ranges=False):
+        """Send a file; with ranges=True a single "Range: bytes=a-b" is honoured (video seeking)."""
+        status, total = HTTPStatus.OK, len(data)
+        match = ranges and re.match(r"bytes=(\d*)-(\d*)$", self.headers.get("Range") or "")
+        if match and (match.group(1) or match.group(2)):
+            if match.group(1):
+                start = int(match.group(1))
+                end = min(int(match.group(2)), total - 1) if match.group(2) else total - 1
+            else:
+                start, end = max(0, total - int(match.group(2))), total - 1
+            if start > end or start >= total:
+                self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                self.send_header("Content-Range", f"bytes */{total}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            status, data = HTTPStatus.PARTIAL_CONTENT, data[start:end + 1]
+        self.send_response(status)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(data)))
+        if ranges:
+            self.send_header("Accept-Ranges", "bytes")
+        if status == HTTPStatus.PARTIAL_CONTENT:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
         if filename:
             kind = "attachment" if attachment else "inline"
             self.send_header("Content-Disposition", f"{kind}; filename*=UTF-8''{quote(filename)}")
         self.end_headers()
         self.wfile.write(data)
+
+    def check_request(self, method):
+        """Refuse API calls from other sites: unknown Host (DNS rebinding) or, for any state change,
+        a missing app header (cross-site request)."""
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        if host not in self.allowed_hosts:
+            raise HttpError(HTTPStatus.FORBIDDEN, "Hôte non autorisé.")
+        if method != "GET" and self.headers.get(CSRF_HEADER) != "1":
+            raise HttpError(HTTPStatus.FORBIDDEN, "Requête refusée : elle ne vient pas de l'application.")
 
     def send_json(self, payload, status=HTTPStatus.OK):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -261,6 +312,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             if path.startswith("/api/"):
+                self.check_request(method)
                 for m, pattern, fn in ROUTES:
                     match = pattern.match(path)
                     if m == method and match:
@@ -309,6 +361,10 @@ class Handler(BaseHTTPRequestHandler):
         self.dispatch("DELETE")
 
 
-def make_server(db, host, port):
-    handler = type("BoundHandler", (Handler,), {"db": db})
+def make_server(db, host, port, allow_launch=True):
+    hosts = {"localhost", "127.0.0.1", "::1"}
+    if host not in ("0.0.0.0", "::", ""):
+        hosts.add(host.lower())
+    handler = type("BoundHandler", (Handler,), {
+        "db": db, "allow_launch": allow_launch, "allowed_hosts": frozenset(hosts)})
     return ThreadingHTTPServer((host, port), handler)

@@ -2,7 +2,8 @@
 // mock-api.js to produce the standalone demo, so both must expose the same API.
 (function () {
   async function request(method, url, body) {
-    const opts = { method, headers: {} };
+    // X-Checklist: lets the server tell its own UI from cross-site requests (see server.py).
+    const opts = { method, headers: { 'X-Checklist': '1' } };
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
@@ -44,20 +45,20 @@
     deleteImage: (id) => del(`/api/images/${id}`),
 
     uploadImage: (taskId, file) => upload(`/api/delivery-tasks/${taskId}/images`, file),
-    uploadTemplateImage: (taskId, file) => upload(`/api/tasks/${taskId}/images`, file),
-    deleteTemplateImage: (id) => del(`/api/template-images/${id}`),
     imageToTemplate: (id) => post(`/api/images/${id}/to-template`),
+    uploadMedia: (file) => upload('/api/media', file),
+    launchProgram: (taskId, blockId) => post(`/api/delivery-tasks/${taskId}/blocks/${blockId}/launch`),
 
     exportReport: (id, fmt) => download(`/api/deliveries/${id}/report.${fmt}`, `livraison.${fmt}`),
-    exportTaskTable: (id, index) => download(
-      index === null || index === undefined ? `/api/delivery-tasks/${id}/tables.docx` : `/api/delivery-tasks/${id}/tables/${index}.docx`,
+    exportTaskTable: (id, blockId) => download(
+      blockId ? `/api/delivery-tasks/${id}/tables/${blockId}.docx` : `/api/delivery-tasks/${id}/tables.docx`,
       'tableaux.docx'),
   };
 
   async function upload(url, file) {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': file.type, 'X-Filename': encodeURIComponent(file.name || 'capture.png') },
+      headers: { 'Content-Type': file.type, 'X-Filename': encodeURIComponent(file.name || 'capture.png'), 'X-Checklist': '1' },
       body: file,
     });
     const data = await res.json().catch(() => ({}));

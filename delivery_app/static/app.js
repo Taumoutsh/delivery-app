@@ -723,7 +723,7 @@
       } else if (action === 'media-remove') {
         sync();
         const b = ed.blocks.find((x) => x.id === card.dataset.card);
-        b.files = b.files.filter((f) => f.id !== btn.dataset.file);
+        b.files = b.files.filter((f) => String(f.id) !== btn.dataset.file);
         refresh();
       }
     });

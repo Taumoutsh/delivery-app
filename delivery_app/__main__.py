@@ -37,6 +37,8 @@ def main():
     parser.add_argument("--data", default=os.environ.get("DELIVERY_DATA", str(DEFAULT_DATA)),
                         help="dossier contenant la base SQLite (défaut : ./data)")
     parser.add_argument("--open", action="store_true", help="ouvrir le navigateur au démarrage")
+    parser.add_argument("--no-launch", action="store_true", default=os.environ.get("DELIVERY_NO_LAUNCH") == "1",
+                        help="désactiver le lancement de programmes depuis les tâches")
     parser.add_argument("--version", action="version", version=f"Checklist Livraison {__version__}")
     args = parser.parse_args()
 
@@ -49,7 +51,7 @@ def main():
     if db.backup_path:
         print(f"Base mise à jour ; sauvegarde de l'ancienne : {db.backup_path}")
     try:
-        server = make_server(db, args.host, args.port)
+        server = make_server(db, args.host, args.port, allow_launch=not args.no_launch)
     except OSError as exc:
         raise SystemExit(f"Impossible d'écouter sur le port {args.port} ({exc}). Essayez --port 8766.")
     url = f"http://{'localhost' if args.host in ('127.0.0.1', '0.0.0.0') else args.host}:{args.port}/"

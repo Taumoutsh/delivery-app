@@ -6,6 +6,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import blocks as blockreg
 from .templating import build_variables, render_command  # noqa: F401 (re-exported)
 
 # Schema of a NEW database, always at the latest version. Existing databases are upgraded
@@ -22,12 +23,14 @@ CREATE TABLE IF NOT EXISTS template_tasks (
     position          INTEGER NOT NULL DEFAULT 0,
     title             TEXT    NOT NULL,
     description       TEXT    NOT NULL DEFAULT '',
-    command           TEXT    NOT NULL DEFAULT '',   -- legacy (v1-v2), replaced by commands
-    table_spec        TEXT    NOT NULL DEFAULT '',   -- legacy (v2), replaced by link_tables
-    commands          TEXT    NOT NULL DEFAULT '[]', -- JSON [{"label": str, "text": str}]
-    link_tables       TEXT    NOT NULL DEFAULT '[]', -- JSON [{"title": str, "spec": str}]
+    blocks            TEXT    NOT NULL DEFAULT '[]', -- JSON content blocks, see blocks.py
+    estimated_minutes INTEGER NOT NULL DEFAULT 0,    -- also the task's weight in the progress
+    -- legacy columns, unused since v5 (kept so old databases and new ones stay identical):
+    command           TEXT    NOT NULL DEFAULT '',
+    table_spec        TEXT    NOT NULL DEFAULT '',
+    commands          TEXT    NOT NULL DEFAULT '[]',
+    link_tables       TEXT    NOT NULL DEFAULT '[]',
     weight            INTEGER NOT NULL DEFAULT 1,
-    estimated_minutes INTEGER NOT NULL DEFAULT 0,
     created_at        TEXT    NOT NULL,
     updated_at        TEXT    NOT NULL
 );
@@ -50,12 +53,14 @@ CREATE TABLE IF NOT EXISTS delivery_tasks (
     position          INTEGER NOT NULL DEFAULT 0,
     title             TEXT    NOT NULL,
     description       TEXT    NOT NULL DEFAULT '',
-    command           TEXT    NOT NULL DEFAULT '',   -- legacy (v1-v2), replaced by commands
-    table_spec        TEXT    NOT NULL DEFAULT '',   -- legacy (v2), replaced by link_tables
-    commands          TEXT    NOT NULL DEFAULT '[]', -- JSON [{"label": str, "text": str}]
-    link_tables       TEXT    NOT NULL DEFAULT '[]', -- JSON [{"title": str, "spec": str}]
+    blocks            TEXT    NOT NULL DEFAULT '[]', -- JSON content blocks, see blocks.py
+    estimated_minutes INTEGER NOT NULL DEFAULT 0,    -- also the task's weight in the progress
+    -- legacy columns, unused since v5 (kept so old databases and new ones stay identical):
+    command           TEXT    NOT NULL DEFAULT '',
+    table_spec        TEXT    NOT NULL DEFAULT '',
+    commands          TEXT    NOT NULL DEFAULT '[]',
+    link_tables       TEXT    NOT NULL DEFAULT '[]',
     weight            INTEGER NOT NULL DEFAULT 1,
-    estimated_minutes INTEGER NOT NULL DEFAULT 0,
     status            TEXT    NOT NULL DEFAULT 'todo', -- todo | running | paused | done | skipped
     elapsed_seconds   INTEGER NOT NULL DEFAULT 0,
     running_since     TEXT,
@@ -81,7 +86,18 @@ CREATE TABLE IF NOT EXISTS images (
     reference        INTEGER NOT NULL DEFAULT 0  -- 1 = copied from the template task at creation
 );
 
--- Reference screenshots of a template task, copied into each new delivery.
+-- Files of "media" blocks (images, videos). Immutable and shared: a delivery created from the
+-- template references the same rows, so the template can change without touching the history.
+CREATE TABLE IF NOT EXISTS media (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename   TEXT NOT NULL,
+    mime       TEXT NOT NULL,
+    size       INTEGER NOT NULL,
+    data       BLOB NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- Legacy (v4), emptied by the v5 migration: reference screenshots now live in media blocks.
 CREATE TABLE IF NOT EXISTS template_images (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     template_task_id INTEGER NOT NULL REFERENCES template_tasks(id) ON DELETE CASCADE,
@@ -131,12 +147,45 @@ def _migrate_v4(conn):
     conn.execute("ALTER TABLE images ADD COLUMN reference INTEGER NOT NULL DEFAULT 0")
 
 
+def _migrate_v5(conn):
+    """v5: task content becomes an ordered list of typed blocks; files move to the media table.
+
+    Commands and Word tables become blocks; template reference screenshots (template_images) and
+    their copies in deliveries (images.reference = 1) become a "media" block.
+    """
+    conn.execute("""CREATE TABLE media (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT NOT NULL, mime TEXT NOT NULL,
+        size INTEGER NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL)""")
+    for table, images_sql, delete_sql in (
+            ("template_tasks", "SELECT filename, mime, size, data, created_at FROM template_images"
+                               " WHERE template_task_id=? ORDER BY id",
+             "DELETE FROM template_images WHERE template_task_id=?"),
+            ("delivery_tasks", "SELECT filename, mime, size, data, created_at FROM images"
+                               " WHERE delivery_task_id=? AND reference=1 ORDER BY id",
+             "DELETE FROM images WHERE delivery_task_id=? AND reference=1")):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN blocks TEXT NOT NULL DEFAULT '[]'")
+        for task_id, commands, tables in conn.execute(f"SELECT id, commands, link_tables FROM {table}").fetchall():
+            blocks = [{"type": "command", "label": c.get("label", ""), "text": c.get("text", "")}
+                      for c in json.loads(commands or "[]")]
+            blocks += [{"type": "table", "title": t.get("title", ""), "spec": t.get("spec", "")}
+                       for t in json.loads(tables or "[]")]
+            files = [conn.execute("INSERT INTO media (filename, mime, size, data, created_at) VALUES (?,?,?,?,?)",
+                                  tuple(img)).lastrowid
+                     for img in conn.execute(images_sql, (task_id,)).fetchall()]
+            if files:
+                blocks.append({"type": "media", "title": "Captures de référence", "files": files})
+                conn.execute(delete_sql, (task_id,))
+            conn.execute(f"UPDATE {table} SET blocks=? WHERE id=?",
+                         (json.dumps(blockreg.normalize(blocks), ensure_ascii=False), task_id))
+
+
 # version -> step upgrading a database from (version - 1). Steps run in order, in one transaction.
 # Never edit a released step: add a new one.
 MIGRATIONS = {
     2: _migrate_v2,
     3: _migrate_v3,
     4: _migrate_v4,
+    5: _migrate_v5,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 
@@ -144,49 +193,46 @@ SCHEMA_VERSION = max(MIGRATIONS)
 class SchemaTooNew(Exception):
     """The database was written by a more recent version of the app."""
 
-# (title, description, [(label, command)], weight, estimated minutes, [(table title, table spec)])
+# (title, description, estimated minutes, blocks) — examples to adapt.
 SEED_TASKS = [
     ("Mettre à jour le numéro de version",
-     "Mettre à jour le fichier de version et le changelog avant de créer la branche.",
-     [("", 'git checkout develop && git pull\necho "{{version}}" > VERSION\n'
-           'git commit -am "chore: bump version to {{version}}"')],
-     2, 10, []),
-    ("Créer la branche de release",
-     "La branche part de develop à jour.",
-     [("", "git checkout -b release/{{version}}\ngit push -u origin release/{{version}}")],
-     1, 5, []),
+     "Mettre à jour le fichier de version et le changelog avant de créer la branche.", 10,
+     [{"type": "command", "label": "", "text": 'git checkout develop && git pull\necho "{{version}}" > VERSION\n'
+                                              'git commit -am "chore: bump version to {{version}}"'}]),
+    ("Créer la branche de release", "La branche part de develop à jour.", 5,
+     [{"type": "command", "label": "", "text": "git checkout -b release/{{version}}\ngit push -u origin release/{{version}}"}]),
     ("Lancer la suite de tests",
-     "Tous les tests doivent passer. Joindre une capture du rapport en cas d'échec.",
-     [("Tests", "make test"), ("Qualité", "make lint")],
-     3, 30, []),
-    ("Construire les artefacts",
-     "Build de l'image et du paquet pour la version.",
-     [("Image Docker", "docker build -t registry.local/app:{{version}} .\ndocker push registry.local/app:{{version}}"),
-      ("Paquet", "make package VERSION={{version}}")],
-     3, 20, []),
-    ("Tagger la version",
-     "Tag annoté, comparé à la version précédente {{prev_version}}.",
-     [("Créer le tag", 'git tag -a v{{version}} -m "Release {{version}}"\ngit push origin v{{version}}'),
-      ("Changements depuis {{prev_version}}", "git log --oneline v{{prev_version}}..v{{version}}")],
-     1, 5, []),
-    ("Déployer en recette",
-     "Vérifier les logs après déploiement.",
-     [("", "./deploy.sh --env recette --version {{version}}")],
-     3, 25, []),
-    ("Rédiger les notes de version",
-     "Résumé des changements depuis {{prev_version}}, à envoyer à l'équipe.",
-     [],
-     2, 20,
-     [("Liens de la livraison",
+     "Tous les tests doivent passer. Joindre une capture du rapport en cas d'échec.", 30,
+     [{"type": "command", "label": "Tests", "text": "make test"},
+      {"type": "command", "label": "Qualité", "text": "make lint"},
+      {"type": "link", "label": "Pipeline de la branche", "url": "https://ci.example.com/app/-/pipelines?ref=release/{{version}}"}]),
+    ("Construire les artefacts", "Build de l'image et du paquet pour la version.", 20,
+     [{"type": "command", "label": "Image Docker",
+       "text": "docker build -t registry.local/app:{{version}} .\ndocker push registry.local/app:{{version}}"},
+      {"type": "command", "label": "Paquet", "text": "make package VERSION={{version}}"}]),
+    ("Tagger la version", "Tag annoté, comparé à la version précédente {{prev_version}}.", 5,
+     [{"type": "command", "label": "Créer le tag",
+       "text": 'git tag -a v{{version}} -m "Release {{version}}"\ngit push origin v{{version}}'},
+      {"type": "command", "label": "Changements depuis {{prev_version}}",
+       "text": "git log --oneline v{{prev_version}}..v{{version}}"}]),
+    ("Déployer en recette", "Déployer puis vérifier que la recette répond avec la bonne version.", 25,
+     [{"type": "note", "text": "Prévenir l'équipe support avant de lancer le déploiement de {{version}}."},
+      {"type": "command", "label": "", "text": "./deploy.sh --env recette --version {{version}}"},
+      {"type": "link", "label": "Santé de la recette", "url": "https://recette.example.com/health"}]),
+    ("Rédiger les notes de version", "Résumé des changements depuis {{prev_version}}, à envoyer à l'équipe.", 20,
+     [{"type": "table", "title": "Liens de la livraison", "spec":
        "Élément | Lien\n"
        "Notes de version {{version}} | [Wiki — release {{version}}](https://wiki.example.com/releases/{{version}})\n"
        "Tag Git | [v{{version}}](https://git.example.com/app/-/tags/v{{version}})\n"
-       "Comparaison | [v{{prev_version}}...v{{version}}](https://git.example.com/app/-/compare/v{{prev_version}}...v{{version}})"),
-      ("Livrables",
+       "Comparaison | [v{{prev_version}}...v{{version}}](https://git.example.com/app/-/compare/v{{prev_version}}...v{{version}})"},
+      {"type": "table", "title": "Livrables", "spec":
        "Livrable | Emplacement\n"
        "Image Docker | [registry.local/app:{{version}}](https://registry.local/harbor/projects/app/tags/{{version}})\n"
-       "Paquet | [app-{{version}}.tar.gz](https://artifacts.example.com/app/{{version}}/app-{{version}}.tar.gz)")]),
+       "Paquet | [app-{{version}}.tar.gz](https://artifacts.example.com/app/{{version}}/app-{{version}}.tar.gz)"}]),
 ]
+
+# Media files not referenced by any block are deleted after this delay (abandoned uploads).
+MEDIA_GRACE_DAYS = 1
 
 
 def now_iso():
@@ -205,10 +251,15 @@ def live_elapsed(task):
     return elapsed
 
 
+def weight_of(task):
+    """A task weighs its estimated time; a task without estimate counts as 1 minute."""
+    return max(1, task["estimated_minutes"] or 0)
+
+
 def progress_of(tasks):
-    """Weighted progress in percent; skipped tasks leave the denominator."""
-    total = sum(t["weight"] for t in tasks if t["status"] != "skipped")
-    done = sum(t["weight"] for t in tasks if t["status"] == "done")
+    """Progress in percent weighted by estimated time; skipped tasks leave the denominator."""
+    total = sum(weight_of(t) for t in tasks if t["status"] != "skipped")
+    done = sum(weight_of(t) for t in tasks if t["status"] == "done")
     return round(100 * done / total) if total else 0
 
 
@@ -223,6 +274,7 @@ class Database:
         self.backup_path = None
         try:
             self._migrate()
+            self.collect_media()
         except Exception:
             self.conn.close()
             raise
@@ -266,15 +318,11 @@ class Database:
             self.conn.execute("INSERT INTO settings VALUES ('default_variables', ?)",
                               (json.dumps({"prev_version": ""}),))
             ts = now_iso()
-            for pos, (title, desc, commands, weight, est, tables) in enumerate(SEED_TASKS):
-                fields = _task_fields({
-                    "title": title, "description": desc, "weight": weight, "estimated_minutes": est,
-                    "commands": [{"label": label, "text": text} for label, text in commands],
-                    "link_tables": [{"title": t, "spec": spec} for t, spec in tables]})
+            for pos, (title, desc, est, blocks) in enumerate(SEED_TASKS):
+                fields = _task_fields({"title": title, "description": desc, "estimated_minutes": est, "blocks": blocks})
                 self.conn.execute(
-                    "INSERT INTO template_tasks (position, title, description, commands, link_tables, weight,"
-                    " estimated_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                    (pos, *fields, ts, ts))
+                    "INSERT INTO template_tasks (position, title, description, blocks, estimated_minutes,"
+                    " created_at, updated_at) VALUES (?,?,?,?,?,?,?)", (pos, *fields, ts, ts))
 
     def _backup(self, version):
         """Copy the database next to itself before upgrading it (delivery.db.v1-20261020-154700.bak)."""
@@ -314,23 +362,16 @@ class Database:
 
     def list_template_tasks(self):
         with self._lock:
-            tasks = [_task_out(t) for t in self._all("SELECT * FROM template_tasks ORDER BY position, id")]
-            for t in tasks:
-                t["images"] = self._all("SELECT id, filename, mime, size, created_at FROM template_images"
-                                        " WHERE template_task_id=? ORDER BY id", (t["id"],))
-                for img in t["images"]:
-                    img["url"] = f"/api/template-images/{img['id']}"
-            return tasks
+            return self._tasks_out(self._all("SELECT * FROM template_tasks ORDER BY position, id"))
 
     def create_template_task(self, data):
         ts = now_iso()
         with self._lock, self.conn:
             pos = self.conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM template_tasks").fetchone()[0]
             cur = self.conn.execute(
-                "INSERT INTO template_tasks (position, title, description, commands, link_tables, weight,"
-                " estimated_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                (pos, *_task_fields(data), ts, ts))
-            return _task_out(self._one("SELECT * FROM template_tasks WHERE id=?", (cur.lastrowid,)))
+                "INSERT INTO template_tasks (position, title, description, blocks, estimated_minutes,"
+                " created_at, updated_at) VALUES (?,?,?,?,?,?,?)", (pos, *_task_fields(data), ts, ts))
+            return self._tasks_out([self._one("SELECT * FROM template_tasks WHERE id=?", (cur.lastrowid,))])[0]
 
     def update_template_task(self, task_id, data):
         with self._lock, self.conn:
@@ -339,10 +380,9 @@ class Database:
                 return None
             merged = {**_task_out(current), **data}
             self.conn.execute(
-                "UPDATE template_tasks SET title=?, description=?, commands=?, link_tables=?, weight=?,"
-                " estimated_minutes=?, updated_at=? WHERE id=?",
-                (*_task_fields(merged), now_iso(), task_id))
-            return _task_out(self._one("SELECT * FROM template_tasks WHERE id=?", (task_id,)))
+                "UPDATE template_tasks SET title=?, description=?, blocks=?, estimated_minutes=?, updated_at=?"
+                " WHERE id=?", (*_task_fields(merged), now_iso(), task_id))
+            return self._tasks_out([self._one("SELECT * FROM template_tasks WHERE id=?", (task_id,))])[0]
 
     def delete_template_task(self, task_id):
         with self._lock, self.conn:
@@ -360,7 +400,7 @@ class Database:
         with self._lock:
             deliveries = self._all("SELECT * FROM deliveries ORDER BY created_at DESC, id DESC")
             for d in deliveries:
-                tasks = self._all("SELECT weight, status, estimated_minutes, elapsed_seconds, running_since"
+                tasks = self._all("SELECT status, estimated_minutes, elapsed_seconds, running_since"
                                   " FROM delivery_tasks WHERE delivery_id=?", (d["id"],))
                 d["variables"] = json.loads(d["variables"])
                 d["progress"] = progress_of(tasks)
@@ -380,16 +420,12 @@ class Database:
                 (version, str(data.get("name") or "").strip(), json.dumps(variables), ts))
             delivery_id = cur.lastrowid
             for t in self._all("SELECT * FROM template_tasks ORDER BY position, id"):
-                task_id = self.conn.execute(
-                    "INSERT INTO delivery_tasks (delivery_id, template_task_id, position, title, description,"
-                    " commands, link_tables, weight, estimated_minutes) VALUES (?,?,?,?,?,?,?,?,?)",
-                    (delivery_id, t["id"], t["position"], t["title"], t["description"], t["commands"],
-                     t["link_tables"], t["weight"], t["estimated_minutes"])).lastrowid
-                # Copies, not links: editing the template later never changes this delivery.
+                # The blocks are copied; their media files are immutable rows shared with the template.
                 self.conn.execute(
-                    "INSERT INTO images (delivery_task_id, filename, mime, size, data, created_at, reference)"
-                    " SELECT ?, filename, mime, size, data, created_at, 1 FROM template_images"
-                    " WHERE template_task_id=? ORDER BY id", (task_id, t["id"]))
+                    "INSERT INTO delivery_tasks (delivery_id, template_task_id, position, title, description,"
+                    " blocks, estimated_minutes) VALUES (?,?,?,?,?,?,?)",
+                    (delivery_id, t["id"], t["position"], t["title"], t["description"], t["blocks"],
+                     t["estimated_minutes"]))
         return self.get_delivery(delivery_id)
 
     def get_delivery(self, delivery_id):
@@ -398,17 +434,16 @@ class Database:
             if not d:
                 return None
             d["variables"] = json.loads(d["variables"])
-            tasks = [_task_out(t) for t in self._all(
-                "SELECT * FROM delivery_tasks WHERE delivery_id=? ORDER BY position, id", (delivery_id,))]
+            tasks = self._tasks_out(self._all(
+                "SELECT * FROM delivery_tasks WHERE delivery_id=? ORDER BY position, id", (delivery_id,)))
             for t in tasks:
                 t["comments"] = self._all(
                     "SELECT id, body, created_at FROM comments WHERE delivery_task_id=? ORDER BY id", (t["id"],))
                 t["images"] = self._all(
-                    "SELECT id, filename, mime, size, created_at, reference FROM images WHERE delivery_task_id=?"
-                    " ORDER BY reference DESC, id", (t["id"],))
+                    "SELECT id, filename, mime, size, created_at FROM images WHERE delivery_task_id=? ORDER BY id",
+                    (t["id"],))
                 for img in t["images"]:
                     img["url"] = f"/api/images/{img['id']}"
-                    img["reference"] = bool(img["reference"])
             d["tasks"] = tasks
             d["progress"] = progress_of(tasks)
             return d
@@ -444,7 +479,7 @@ class Database:
     def get_delivery_task(self, task_id):
         with self._lock:
             task = self._task(task_id)
-            return _task_out(task) if task else None
+            return self._tasks_out([task])[0] if task else None
 
     def add_delivery_task(self, delivery_id, data):
         with self._lock, self.conn:
@@ -457,8 +492,7 @@ class Database:
                                     " WHERE delivery_id=?", (delivery_id,)).fetchone()[0]
             self.conn.execute(
                 "INSERT INTO delivery_tasks (delivery_id, template_task_id, position, title, description,"
-                " commands, link_tables, weight, estimated_minutes) VALUES (?,?,?,?,?,?,?,?,?)",
-                (delivery_id, template_id, pos, *_task_fields(data)))
+                " blocks, estimated_minutes) VALUES (?,?,?,?,?,?,?)", (delivery_id, template_id, pos, *_task_fields(data)))
         return self.get_delivery(delivery_id)
 
     def update_delivery_task(self, task_id, data):
@@ -468,9 +502,8 @@ class Database:
                 return None
             merged = {**_task_out(current), **data}
             self.conn.execute(
-                "UPDATE delivery_tasks SET title=?, description=?, commands=?, link_tables=?, weight=?,"
-                " estimated_minutes=?"
-                " WHERE id=?", (*_task_fields(merged), task_id))
+                "UPDATE delivery_tasks SET title=?, description=?, blocks=?, estimated_minutes=? WHERE id=?",
+                (*_task_fields(merged), task_id))
         return self.get_delivery(current["delivery_id"])
 
     def delete_delivery_task(self, task_id):
@@ -556,41 +589,89 @@ class Database:
             return self._one("SELECT * FROM images WHERE id=?", (image_id,))
 
     def image_to_template(self, image_id):
-        """Copy a delivery screenshot onto the template task it came from (reference for next deliveries)."""
+        """Add a delivery screenshot to the template task it came from, in its first media block
+        (created as "Captures de référence" if needed), for the next deliveries."""
         with self._lock, self.conn:
             row = self._one("SELECT i.*, t.template_task_id, t.delivery_id FROM images i JOIN delivery_tasks t"
                             " ON t.id = i.delivery_task_id WHERE i.id=?", (image_id,))
             if not row:
                 return None
-            if not row["template_task_id"] or not self._one("SELECT id FROM template_tasks WHERE id=?",
-                                                            (row["template_task_id"],)):
+            tpl = row["template_task_id"] and self._one("SELECT * FROM template_tasks WHERE id=?",
+                                                        (row["template_task_id"],))
+            if not tpl:
                 raise ValueError("Cette tâche ne provient pas du modèle (ou sa tâche modèle a été supprimée).")
-            self.conn.execute(
-                "INSERT INTO template_images (template_task_id, filename, mime, size, data, created_at)"
-                " VALUES (?,?,?,?,?,?)",
-                (row["template_task_id"], row["filename"], row["mime"], row["size"], row["data"], now_iso()))
+            media_id = self._insert_media(row["filename"], row["mime"], row["data"])
+            blocks = blockreg.normalize(json.loads(tpl["blocks"]))
+            target = next((b for b in blocks if b["type"] == "media"), None)
+            if target is None:
+                target = {"id": blockreg.new_id(), "type": "media", "title": "Captures de référence", "files": []}
+                blocks.append(target)
+            target["files"].append(media_id)
+            self.conn.execute("UPDATE template_tasks SET blocks=?, updated_at=? WHERE id=?",
+                              (json.dumps(blocks, ensure_ascii=False), now_iso(), tpl["id"]))
         return self.get_delivery(row["delivery_id"])
 
-    # -- template images --------------------------------------------------
+    # -- media (files of media blocks) -----------------------------------
 
-    def add_template_image(self, task_id, filename, mime, data):
+    def _insert_media(self, filename, mime, data):
+        return self.conn.execute(
+            "INSERT INTO media (filename, mime, size, data, created_at) VALUES (?,?,?,?,?)",
+            (filename, mime, len(data), sqlite3.Binary(data), now_iso())).lastrowid
+
+    def add_media(self, filename, mime, data):
+        """Store a file for a media block; it is attached when the task is saved."""
         with self._lock, self.conn:
-            if not self._one("SELECT id FROM template_tasks WHERE id=?", (task_id,)):
-                return None
-            self.conn.execute(
-                "INSERT INTO template_images (template_task_id, filename, mime, size, data, created_at)"
-                " VALUES (?,?,?,?,?,?)", (task_id, filename, mime, len(data), sqlite3.Binary(data), now_iso()))
-        return self.list_template_tasks()
+            media_id = self._insert_media(filename, mime, data)
+        return self._media_info([media_id])[media_id]
 
-    def get_template_image(self, image_id):
+    def get_media(self, media_id):
         with self._lock:
-            return self._one("SELECT * FROM template_images WHERE id=?", (image_id,))
+            return self._one("SELECT * FROM media WHERE id=?", (media_id,))
 
-    def delete_template_image(self, image_id):
+    def _media_info(self, ids):
+        ids = list(ids)
+        if not ids:
+            return {}
+        rows = self._all(f"SELECT id, filename, mime, size FROM media WHERE id IN ({','.join('?' * len(ids))})", ids)
+        return {r["id"]: {**r, "url": f"/api/media/{r['id']}"} for r in rows}
+
+    def _tasks_out(self, rows):
+        """API shape of task rows, with the details of their media files."""
+        tasks = [_task_out(r) for r in rows]
+        info = self._media_info({i for t in tasks for i in blockreg.media_ids(t["blocks"])})
+        for t in tasks:
+            for b in t["blocks"]:
+                if b["type"] == "media":
+                    b["files"] = [info[i] for i in b["files"] if i in info]
+        return tasks
+
+    def collect_media(self):
+        """Delete media no block references any more (abandoned uploads, removed files)."""
         with self._lock, self.conn:
-            if not self.conn.execute("DELETE FROM template_images WHERE id=?", (image_id,)).rowcount:
+            used = set()
+            for table in ("template_tasks", "delivery_tasks"):
+                for (raw,) in self.conn.execute(f"SELECT blocks FROM {table}").fetchall():
+                    used.update(blockreg.media_ids(blockreg.normalize(json.loads(raw or "[]"))))
+            cutoff = datetime.now(timezone.utc).timestamp() - MEDIA_GRACE_DAYS * 86400
+            stale = [r["id"] for r in self._all("SELECT id, created_at FROM media")
+                     if r["id"] not in used and parse_iso(r["created_at"]).timestamp() < cutoff]
+            for media_id in stale:
+                self.conn.execute("DELETE FROM media WHERE id=?", (media_id,))
+            return len(stale)
+
+    # -- programs ---------------------------------------------------------
+
+    def program_of(self, task_id, block_id):
+        """Program block of a delivery task with its variables resolved, or None."""
+        with self._lock:
+            task = self.get_delivery_task(task_id)
+            if not task:
                 return None
-        return self.list_template_tasks()
+            block = next((b for b in task["blocks"] if b["id"] == block_id and b["type"] == "program"), None)
+            if not block:
+                return None
+            variables = build_variables(self.get_delivery(task["delivery_id"]))
+            return {k: render_command(block[k], variables) for k in ("name", "path", "args", "cwd")}
 
     def delete_image(self, image_id):
         with self._lock, self.conn:
@@ -602,53 +683,24 @@ class Database:
         return self.get_delivery(row["delivery_id"])
 
 
-def _json_list(value):
-    if isinstance(value, str):
-        try:
-            value = json.loads(value or "[]")
-        except ValueError:
-            return []
-    return value if isinstance(value, list) else []
-
-
-def _clean_commands(value):
-    """[{"label", "text"}] without empty blocks."""
-    out = []
-    for item in _json_list(value):
-        if isinstance(item, dict) and str(item.get("text") or "").strip():
-            out.append({"label": str(item.get("label") or "").strip(), "text": str(item["text"])})
-    return out
-
-
-def _clean_tables(value):
-    """[{"title", "spec"}] without empty tables."""
-    out = []
-    for item in _json_list(value):
-        if isinstance(item, dict) and str(item.get("spec") or "").strip():
-            out.append({"title": str(item.get("title") or "").strip(), "spec": str(item["spec"])})
-    return out
-
-
 def _task_out(task):
-    """API shape of a task row: JSON lists decoded, legacy v1/v2 columns hidden."""
+    """API shape of a task row: blocks decoded, legacy columns hidden."""
     task = dict(task)
-    task.pop("command", None)
-    task.pop("table_spec", None)
-    task["commands"] = _clean_commands(task.get("commands"))
-    task["link_tables"] = _clean_tables(task.get("link_tables"))
+    for legacy in ("command", "table_spec", "commands", "link_tables", "weight"):
+        task.pop(legacy, None)
+    raw = task.get("blocks")
+    task["blocks"] = blockreg.normalize(json.loads(raw or "[]") if isinstance(raw, str) else raw)
     return task
 
 
 def _task_fields(data):
-    """Values for (title, description, commands, link_tables, weight, estimated_minutes)."""
+    """Values for (title, description, blocks, estimated_minutes)."""
     title = str(data.get("title") or "").strip()
     if not title:
         raise ValueError("Le titre est obligatoire.")
     return (
         title,
         str(data.get("description") or ""),
-        json.dumps(_clean_commands(data.get("commands")), ensure_ascii=False),
-        json.dumps(_clean_tables(data.get("link_tables")), ensure_ascii=False),
-        max(0, int(data.get("weight") or 0)),
+        json.dumps(blockreg.normalize(data.get("blocks")), ensure_ascii=False),
         max(0, int(data.get("estimated_minutes") or 0)),
     )

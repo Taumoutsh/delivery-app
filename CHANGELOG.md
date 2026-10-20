@@ -3,6 +3,22 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.5.0 — 2026-10-20
+
+- **Éléments de tâche** : une tâche contient une liste d'éléments, tous facultatifs, ajoutés et
+  triés librement (flèches ou glisser-déposer) : ligne de commande, **lien** (avec variables),
+  **programme** (bouton « Lancer » : exécutable, script ou document ouvert sur votre poste),
+  tableau pour Word, **images et vidéos**, note.
+- Images et vidéos directement dans les tâches du modèle (bouton, glisser-déposer ou Ctrl+V) ;
+  vidéos lisibles dans la visionneuse (200 Mo maximum).
+- **Poids supprimé** : la progression est calculée sur le temps estimé de chaque tâche.
+- Fenêtre de modification d'une tâche repensée : sections « Général » et « Contenu », cartes
+  repliables, ajout par type, aide sur les variables.
+- Sécurité : l'application refuse les requêtes venant d'autres sites ; option `--no-launch` pour
+  désactiver le lancement de programmes.
+- Format de base v5 : commandes, tableaux et captures de référence existants deviennent des éléments
+  (mise à jour automatique avec sauvegarde `.bak`).
+
 ## 1.4.0 — 2026-10-20
 
 - Captures de référence dans le modèle : on ajoute des captures à une tâche du modèle (bouton

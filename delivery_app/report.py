@@ -1,4 +1,8 @@
-"""Delivery reports (PDF and Word) and per-task link tables, standard library only."""
+"""Delivery reports (PDF and Word) and per-task Word tables, standard library only.
+
+Task content blocks are rendered by DOCX_RENDERERS / PDF_RENDERERS (one function per block type,
+see blocks.py); a type without renderer is simply left out of the reports.
+"""
 
 from datetime import datetime, timezone
 
@@ -48,12 +52,8 @@ def _summary(delivery):
     return build_variables(delivery), info
 
 
-def _caption(img):
-    return f"Référence (modèle) — {img['filename']}" if img.get("reference") else img["filename"]
-
-
 def _task_meta(t):
-    return (f"{STATUS_LABELS.get(t['status'], t['status'])} · poids {t['weight']} · "
+    return (f"{STATUS_LABELS.get(t['status'], t['status'])} · "
             f"estimé {fmt_duration(t['estimated_minutes'] * 60)} · passé {fmt_duration(live_elapsed(t))} · "
             f"démarrée {fmt_date(t['started_at'])} · terminée {fmt_date(t['completed_at'])}")
 
@@ -87,47 +87,98 @@ def build_docx(delivery, db):
         doc.paragraph(doc.run(_task_meta(t), color="55606E", size=9))
         if t["description"]:
             doc.paragraph(doc.run(render_command(t["description"], variables)))
-        for cmd in t["commands"]:
-            if cmd["label"]:
-                doc.paragraph(doc.run(render_command(cmd["label"], variables), bold=True, size=9), keep_next=True, after=0)
-            doc.code(render_command(cmd["text"], variables))
-        for title, table in _tables(t, variables):
-            if title:
-                doc.paragraph(doc.run(title, bold=True), keep_next=True, after=60)
-            _docx_table(doc, table)
+        for block in t["blocks"]:
+            render = DOCX_RENDERERS.get(block["type"])
+            if render:
+                render(doc, block, variables, db)
         for c in t["comments"]:
             doc.paragraph(doc.run(f"{fmt_date(c['created_at'])} — ", bold=True) + doc.run(c["body"]))
         for img in t["images"]:
             blob = db.get_image(img["id"])
             if doc.image(blob["data"], img["filename"]):
-                doc.paragraph(doc.run(_caption(img), italic=True, color="55606E", size=8.5))
+                doc.paragraph(doc.run(img["filename"], italic=True, color="55606E", size=8.5))
             else:
                 doc.paragraph(doc.run(f"[image non intégrable : {img['filename']}]", italic=True))
     return doc.to_bytes()
 
 
-def _tables(task, variables):
-    """[(rendered title, parsed table)] for the task's non-empty link tables."""
+def _docx_label(doc, text, variables, size=9):
+    if text:
+        doc.paragraph(doc.run(render_command(text, variables), bold=True, size=size), keep_next=True, after=0)
+
+
+def _docx_command(doc, b, variables, db):
+    _docx_label(doc, b["label"], variables)
+    doc.code(render_command(b["text"], variables))
+
+
+def _docx_link(doc, b, variables, db):
+    url = render_command(b["url"], variables)
+    label = render_command(b["label"], variables) or url
+    doc.paragraph(doc.run("Lien : ", bold=True) + doc.link(label, url) + (doc.run(f"  ({url})", color="55606E", size=9)
+                                                                           if b["label"] else ""))
+
+
+def _docx_program(doc, b, variables, db):
+    name = render_command(b["name"], variables) or "Programme"
+    line = " ".join(x for x in (render_command(b["path"], variables), render_command(b["args"], variables)) if x)
+    doc.paragraph(doc.run(f"Programme : {name}", bold=True), keep_next=True, after=0)
+    doc.code(line)
+
+
+def _docx_table_block(doc, b, variables, db):
+    table = parse_table(b["spec"], variables)
+    if table:
+        if b["title"]:
+            doc.paragraph(doc.run(render_command(b["title"], variables), bold=True), keep_next=True, after=60)
+        _docx_table(doc, table)
+
+
+def _docx_media(doc, b, variables, db):
+    _docx_label(doc, b["title"], variables, size=10)
+    for f in b["files"]:
+        item = db.get_media(f["id"])
+        if item and item["mime"].startswith("image/") and doc.image(item["data"], f["filename"]):
+            doc.paragraph(doc.run(f["filename"], italic=True, color="55606E", size=8.5))
+        else:
+            kind = "Vidéo" if f["mime"].startswith("video/") else "Fichier"
+            doc.paragraph(doc.run(f"[{kind} : {f['filename']} — à consulter dans l'application]", italic=True))
+
+
+def _docx_note(doc, b, variables, db):
+    doc.paragraph(doc.run(render_command(b["text"], variables)), style="Code")
+
+
+DOCX_RENDERERS = {
+    "command": _docx_command,
+    "link": _docx_link,
+    "program": _docx_program,
+    "table": _docx_table_block,
+    "media": _docx_media,
+    "note": _docx_note,
+}
+
+
+def _tables(task, variables, block_id=None):
+    """[(rendered title, parsed table)] for the task's Word table blocks (or the one with block_id)."""
     out = []
-    for item in task["link_tables"]:
-        table = parse_table(item["spec"], variables)
+    for b in task["blocks"]:
+        if b["type"] != "table" or (block_id is not None and b["id"] != block_id):
+            continue
+        table = parse_table(b["spec"], variables)
         if table:
-            out.append((render_command(item["title"], variables), table))
+            out.append((render_command(b["title"], variables), table))
     return out
 
 
-def build_table_docx(task, delivery, index=None):
-    """A .docx holding only the task's link tables (or the one at `index`), ready to insert elsewhere.
+def build_table_docx(task, delivery, block_id=None):
+    """A .docx holding only the task's Word tables (or the block_id one), ready to insert elsewhere.
 
     With several tables each one is preceded by its title.
     """
-    tables = _tables(task, build_variables(delivery))
-    if index is not None:
-        if not 0 <= index < len(tables):
-            raise ValueError("Tableau introuvable.")
-        tables = [tables[index]]
+    tables = _tables(task, build_variables(delivery), block_id)
     if not tables:
-        raise ValueError("Cette tâche n'a pas de tableau.")
+        raise ValueError("Tableau introuvable." if block_id else "Cette tâche n'a pas de tableau.")
     doc = Docx(task["title"])
     for title, table in tables:
         if title and len(tables) > 1:
@@ -140,6 +191,68 @@ def build_table_docx(task, delivery, index=None):
 
 def _pdf_cell(segments, font=pdf.REGULAR):
     return [(text, font, pdf.LINK if url else pdf.INK, url) for text, url in segments]
+
+
+def _pdf_label(doc, text, variables, size=8.5, keep=40):
+    if text:
+        doc.ensure(keep)  # keep the label with what follows
+        doc.text(render_command(text, variables), pdf.BOLD, size, after=0)
+
+
+def _pdf_command(doc, b, variables, db):
+    _pdf_label(doc, b["label"], variables)
+    doc.code(render_command(b["text"], variables))
+
+
+def _pdf_link(doc, b, variables, db):
+    url = render_command(b["url"], variables)
+    label = render_command(b["label"], variables) or url
+    segments = [("Lien : ", pdf.BOLD, pdf.INK, None), (label, pdf.REGULAR, pdf.LINK, url)]
+    if b["label"]:
+        segments.append((f"  ({url})", pdf.REGULAR, pdf.MUTED, None))
+    doc.rich(segments, size=9.5)
+
+
+def _pdf_program(doc, b, variables, db):
+    name = render_command(b["name"], variables) or "Programme"
+    line = " ".join(x for x in (render_command(b["path"], variables), render_command(b["args"], variables)) if x)
+    _pdf_label(doc, f"Programme : {name}", {}, size=9)
+    doc.code(line)
+
+
+def _pdf_table_block(doc, b, variables, db):
+    table = parse_table(b["spec"], variables)
+    if table:
+        _pdf_label(doc, b["title"], variables, size=9.5, keep=70)
+        doc.table([[_pdf_cell(c) for c in table["headers"]]] + [[_pdf_cell(c) for c in r] for r in table["rows"]])
+
+
+def _pdf_media(doc, b, variables, db):
+    _pdf_label(doc, b["title"], variables, size=9.5, keep=120)
+    for f in b["files"]:
+        item = db.get_media(f["id"])
+        try:
+            if not item or not item["mime"].startswith("image/"):
+                raise pdf.Unsupported(item["mime"] if item else "absent")
+            doc.image(item["data"], cache_key=("media", f["id"]))
+            doc.text(f["filename"], pdf.ITALIC, 8, pdf.MUTED)
+        except Exception:
+            kind = "Vidéo" if f["mime"].startswith("video/") else "Fichier"
+            doc.text(f"[{kind} : {f['filename']} — à consulter dans l'application]", pdf.ITALIC, 8.5, pdf.MUTED)
+
+
+def _pdf_note(doc, b, variables, db):
+    doc.text(render_command(b["text"], variables), pdf.ITALIC, 9.5)
+
+
+PDF_RENDERERS = {
+    "command": _pdf_command,
+    "link": _pdf_link,
+    "program": _pdf_program,
+    "table": _pdf_table_block,
+    "media": _pdf_media,
+    "note": _pdf_note,
+}
 
 
 def build_pdf(delivery, db):
@@ -166,24 +279,18 @@ def build_pdf(delivery, db):
         doc.text(_task_meta(t), size=8, color=pdf.MUTED, after=5)
         if t["description"]:
             doc.text(render_command(t["description"], variables), size=9.5)
-        for cmd in t["commands"]:
-            if cmd["label"]:
-                doc.ensure(40)  # keep the label with its command
-                doc.text(render_command(cmd["label"], variables), pdf.BOLD, 8.5, after=0)
-            doc.code(render_command(cmd["text"], variables))
-        for title, table in _tables(t, variables):
-            if title:
-                doc.ensure(70)  # keep the title with the table header and first row
-                doc.text(title, pdf.BOLD, 9.5, after=3)
-            doc.table([[_pdf_cell(c) for c in table["headers"]]] + [[_pdf_cell(c) for c in r] for r in table["rows"]])
+        for block in t["blocks"]:
+            render = PDF_RENDERERS.get(block["type"])
+            if render:
+                render(doc, block, variables, db)
         for c in t["comments"]:
             doc.rich([(f"{fmt_date(c['created_at'])} — ", pdf.BOLD, pdf.INK, None),
                       (c["body"], pdf.REGULAR, pdf.INK, None)], size=9.5)
         for img in t["images"]:
             blob = db.get_image(img["id"])
             try:
-                doc.image(blob["data"], cache_key=img["id"])
-                doc.text(_caption(img), pdf.ITALIC, 8, pdf.MUTED)
+                doc.image(blob["data"], cache_key=("image", img["id"]))
+                doc.text(img["filename"], pdf.ITALIC, 8, pdf.MUTED)
             except Exception:
                 doc.text(f"[image non intégrable : {img['filename']}]", pdf.ITALIC, 8.5, pdf.MUTED)
         doc.space(6)
