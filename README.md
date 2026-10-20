@@ -1,8 +1,9 @@
 # Checklist de livraison
 
-Application web locale pour dérouler la checklist d'une livraison : tâches pondérées,
-commandes copiables adaptées à la version, chronos, commentaires, captures, tableaux de liens
-à coller dans Word, historique et rapport PDF/Word.
+Application web locale pour dérouler la checklist d'une livraison. Chaque tâche contient des
+éléments triables : commandes copiables adaptées à la version, liens, programmes à lancer,
+tableaux à coller dans Word, images et vidéos, notes. Chronos, progression au temps estimé,
+commentaires, captures, historique et rapport PDF/Word.
 
 **Aucune dépendance** : seul Python 3.8+ est nécessaire (pas de pip, pas d'internet).
 
@@ -16,8 +17,8 @@ python checklist-livraison.pyz    # version fichier unique, voir ci-dessous
 Le serveur démarre sur http://localhost:8765 et ouvre le navigateur. La base est stockée dans
 `data/delivery.db` à côté de l'app (c'est le seul fichier à sauvegarder).
 
-Options : `--port 9000`, `--data /chemin/vers/dossier`, `--no-browser`
-(ou variables `DELIVERY_PORT`, `DELIVERY_DATA`).
+Options : `--port 9000`, `--data /chemin/vers/dossier`, `--no-browser`, `--no-launch` (désactive
+le lancement de programmes) — ou variables `DELIVERY_PORT`, `DELIVERY_DATA`, `DELIVERY_NO_LAUNCH=1`.
 
 ## Fichier unique
 

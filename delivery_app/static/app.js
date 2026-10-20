@@ -22,6 +22,7 @@
     list: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M6 4h7M6 8h7M6 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="3" cy="4" r="1" fill="currentColor"/><circle cx="3" cy="8" r="1" fill="currentColor"/><circle cx="3" cy="12" r="1" fill="currentColor"/></svg>',
     file: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M4 1.8h5.2L12.5 5v9.2H4z M9 1.8V5.3h3.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
     up: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M4 10l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+    trash: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     down: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
   };
 
@@ -34,6 +35,7 @@
     expanded: new Set(),  // finished tasks the user re-opened
     collapsed: new Set(), // unfinished tasks the user folded
     menuFor: null,
+    editor: null, // open task editor ({ blocks, open })
   };
 
   const app = document.getElementById('app');
@@ -132,8 +134,10 @@
   }
 
   // Every text of a task that may hold {{variables}}.
-  const taskText = (t) => [t.description, ...t.commands.flatMap((c) => [c.label, c.text]),
-    ...t.link_tables.flatMap((tb) => [tb.title, tb.spec])].join('\n');
+  const taskText = (t) => [t.description, ...(t.blocks || []).flatMap((b) => Blocks.get(b.type)?.texts(b) || [])].join('\n');
+
+  // Progress weight of a task = its estimated time (a task without estimate counts as 1 minute).
+  const weightOf = (t) => Math.max(1, t.estimated_minutes || 0);
 
   function placeholdersIn(tasks) {
     const out = new Set();
@@ -283,12 +287,12 @@
     const vars = buildVariables(d);
     const custom = Object.entries(d.variables || {});
     const active = d.tasks.filter((t) => t.status !== 'skipped');
-    const totalW = active.reduce((a, t) => a + t.weight, 0);
-    const doneW = d.tasks.filter((t) => t.status === 'done').reduce((a, t) => a + t.weight, 0);
     const doneN = d.tasks.filter(finished).length;
+    const doneMin = d.tasks.filter((t) => t.status === 'done').reduce((a, t) => a + t.estimated_minutes, 0);
+    const totalMin = active.reduce((a, t) => a + t.estimated_minutes, 0);
 
-    const segs = d.tasks.map((t) => `<span class="seg ${t.status}" style="flex:${Math.max(t.weight, 0.2)}"
-      title="${esc(t.title)} · poids ${t.weight} · ${STATUS[t.status]}"></span>`).join('');
+    const segs = d.tasks.map((t) => `<span class="seg ${t.status}" style="flex:${weightOf(t)}"
+      title="${esc(t.title)} · ${t.estimated_minutes ? fmtDur(t.estimated_minutes * 60) : 'sans estimation'} · ${STATUS[t.status]}"></span>`).join('');
 
     return `
       <div class="head">
@@ -328,9 +332,8 @@
         <div class="segbar" role="progressbar" aria-valuenow="${d.progress}" aria-valuemin="0" aria-valuemax="100">${segs}</div>
         <div class="stats num">
           <span><b>${doneN}</b> / ${d.tasks.length} tâches</span>
-          <span>Poids <b>${doneW}</b> / ${totalW}</span>
+          <span>Validé <b>${fmtDur(doneMin * 60)}</b> / ${fmtDur(totalMin * 60)} estimées</span>
           <span>Passé <b data-total-spent>—</b></span>
-          <span>Estimé <b>${fmtDur(active.reduce((a, t) => a + t.estimated_minutes * 60, 0))}</b></span>
           <span>Reste estimé <b>${fmtDur(active.filter((t) => !finished(t)).reduce((a, t) => a + t.estimated_minutes * 60, 0))}</b></span>
         </div>
       </section>
@@ -342,7 +345,48 @@
       </div>`;
   }
 
-  // Thumbnails of one task. scope: 'task' (delivery task) or 'tpl' (template task).
+  // Thumbnails of media files ({id, filename, mime, url}). Inside a block, thumbs open the viewer;
+  // editable strips (task editor) also offer add/remove.
+  function mediaStrip(files, { editable = false } = {}) {
+    return `<div class="thumbs media">
+      ${files.map((f) => `
+        <div class="thumb${isVideo(f) ? ' video' : ''}" role="button" tabindex="0" data-act="media-open" data-file="${esc(f.id)}" title="${esc(f.filename)}">
+          ${isVideo(f) ? `<video src="${esc(f.url)}" muted preload="metadata"></video><span class="play">${Blocks.ICON.play}</span>`
+            : `<img src="${esc(f.url)}" alt="${esc(f.filename)}" loading="lazy">`}
+          ${editable ? `<button type="button" class="x" data-ed="media-remove" data-file="${esc(f.id)}" aria-label="Retirer le fichier">✕</button>` : ''}
+        </div>`).join('')}
+      ${editable ? `<button type="button" class="thumb-add" data-ed="media-add">${ICONS.plus}<span>Ajouter</span></button>
+        <input type="file" accept="image/*,video/*" multiple hidden data-ed-upload>` : ''}
+    </div>`;
+  }
+
+  const isVideo = (f) => String(f.mime || '').startsWith('video/');
+
+  // Helpers handed to block types (blocks.js).
+  const H = { esc, renderHtml, renderText, parseTable, cellHtml, mediaStrip };
+
+  function blockBadges(blocks) {
+    const counts = {};
+    for (const b of blocks || []) counts[b.type] = (counts[b.type] || 0) + 1;
+    return Blocks.ORDER.filter((k) => counts[k]).map((k) => `<span class="badge blk-badge" title="${esc(Blocks.get(k).label)}">${Blocks.get(k).icon}${counts[k]}</span>`).join('');
+  }
+
+  function renderBlocks(t, vars) {
+    const tables = t.blocks.filter((b) => b.type === 'table');
+    // The type heading is shown once per run of consecutive blocks of the same type.
+    return t.blocks.map((b, i) => {
+      const type = Blocks.get(b.type);
+      if (!type) return '';
+      const html = type.view(b, { vars, h: H });
+      const heading = t.blocks[i - 1]?.type !== b.type ? `<div class="blk-type">${type.icon}${type.label}</div>` : '';
+      return html ? `<div class="blk blk-${b.type}${heading ? '' : ' cont'}" data-block="${esc(b.id)}" data-task="${t.id}">
+        ${heading}${html}</div>` : '';
+    }).join('') + (tables.length > 1 ? `<div class="add-row table-actions all">
+        <button class="btn" data-act="copy-all-tables" data-task="${t.id}">Copier tous les tableaux Word</button>
+        <button class="btn ghost" data-act="all-tables-docx" data-task="${t.id}">Tous en .docx</button></div>` : '');
+  }
+
+  // Screenshots taken during a delivery (scope 'task').
   function thumbStrip(scope, ownerId, images, { canAdd = true, toTemplate = false, small = false, addLabel = 'Ajouter' } = {}) {
     return `<div class="thumbs${small ? ' small' : ''}">
       ${images.map((img) => `
@@ -356,10 +400,7 @@
     </div>`;
   }
 
-  function imagesOf(scope, ownerId) {
-    const list = scope === 'tpl' ? state.templateTasks : state.delivery.tasks;
-    return list.find((t) => t.id === ownerId)?.images || [];
-  }
+  const imagesOf = (scope, ownerId) => state.delivery.tasks.find((t) => t.id === ownerId)?.images || [];
 
   function renderTask(t, i, vars) {
     const open = isOpen(t);
@@ -372,52 +413,16 @@
     const validate = finished(t) ? '' :
       `<button class="btn ok" data-act="task" data-action="done" data-id="${t.id}">${ICONS.check}Valider</button>`;
 
-    const refImages = t.images.filter((img) => img.reference);
-    const ownImages = t.images.filter((img) => !img.reference);
-    const missing = missingVars(t.commands.map((c) => `${c.label}\n${c.text}`).join('\n'), vars);
-    const tables = t.link_tables.map((tb) => ({ title: renderText(tb.title, vars), table: parseTable(tb.spec, vars) }))
-      .filter((tb) => tb.table);
-    const missingTbl = missingVars(t.link_tables.map((tb) => `${tb.title}\n${tb.spec}`).join('\n'), vars);
-    const warn = (names, fix) => (names.length ? `<div class="warn-vars">Variable non renseignée : ${names.map((m) => `{{${esc(m)}}}`).join(', ')}${fix
-      ? ' — <a href="#" data-act="edit-delivery">la définir</a>' : ''}</div>` : '');
+    const missing = missingVars(taskText(t), vars);
     const body = !open ? '' : `
       <div class="task-body">
         ${t.description ? `<div class="desc">${renderHtml(t.description, vars).replace(/<span class="var[^"]*"[^>]*>/g, '<b>').replace(/<\/span>/g, '</b>')}</div>` : ''}
-        ${t.commands.length ? `<div class="stack">
-          <div class="section-label">${t.commands.length > 1 ? `Lignes de commande (${t.commands.length})` : 'Ligne de commande'}</div>
-          ${t.commands.map((c, i) => `<div class="cmd-block">
-            ${c.label ? `<div class="cmd-label">${renderHtml(c.label, vars)}</div>` : ''}
-            <div class="cmd"><pre>${renderHtml(c.text, vars)}</pre>
-              <button class="copy" data-act="copy" data-id="${t.id}" data-idx="${i}">Copier</button></div>
-          </div>`).join('')}
-          ${warn(missing, true)}
-        </div>` : ''}
-        ${tables.length ? `<div class="stack">
-          <div class="section-label">${tables.length > 1 ? `Tableaux pour Word (${tables.length})` : 'Tableau pour Word'}</div>
-          ${tables.map(({ title, table }, i) => `<div class="table-block">
-            ${title ? `<div class="table-title">${esc(title)}</div>` : ''}
-            <div class="doc-table-wrap"><table class="doc-table">
-              <thead><tr>${table.headers.map((c) => `<th>${cellHtml(c)}</th>`).join('')}</tr></thead>
-              <tbody>${table.rows.map((r) => `<tr>${r.map((c) => `<td>${cellHtml(c)}</td>`).join('')}</tr>`).join('')}</tbody>
-            </table></div>
-            <div class="add-row table-actions">
-              <button class="btn" data-act="copy-table" data-id="${t.id}" data-idx="${i}">Copier pour Word</button>
-              <button class="btn ghost" data-act="table-docx" data-id="${t.id}" data-idx="${i}">Télécharger en .docx</button>
-            </div>
-          </div>`).join('')}
-          ${tables.length > 1 ? `<div class="add-row table-actions all">
-            <button class="btn" data-act="copy-table" data-id="${t.id}">Copier tous les tableaux</button>
-            <button class="btn ghost" data-act="table-docx" data-id="${t.id}">Tous en .docx</button>
-          </div>` : ''}
-          ${warn(missingTbl, true)}
-        </div>` : ''}
-        ${refImages.length ? `<div>
-          <div class="section-label">Captures de référence du modèle (${refImages.length})</div>
-          ${thumbStrip('task', t.id, refImages, { canAdd: false })}
-        </div>` : ''}
+        ${t.blocks.length ? `<div class="blocks">${renderBlocks(t, vars)}</div>` : ''}
+        ${missing.length ? `<div class="warn-vars">Variable non renseignée : ${missing.map((m) => `{{${esc(m)}}}`).join(', ')} —
+          <a href="#" data-act="edit-delivery">la définir</a></div>` : ''}
         <div>
-          <div class="section-label">Captures (${ownImages.length})</div>
-          ${thumbStrip('task', t.id, ownImages, { toTemplate: Boolean(t.template_task_id) })}
+          <div class="section-label">Captures de la livraison (${t.images.length})</div>
+          ${thumbStrip('task', t.id, t.images, { toTemplate: Boolean(t.template_task_id) })}
         </div>
         <div>
           <div class="section-label">Commentaires (${t.comments.length})</div>
@@ -443,11 +448,10 @@
             <strong>${i + 1}. ${esc(t.title)}</strong>
             <span class="task-meta">
               ${t.status !== 'todo' ? `<span class="pill ${t.status}">${STATUS[t.status]}</span>` : ''}
-              <span class="badge">Poids ${t.weight}</span>
               <span class="badge">Estimé ${est ? fmtDur(est * 60) : '—'}</span>
+              ${blockBadges(t.blocks)}
               ${t.comments.length ? `<span class="badge">${t.comments.length} commentaire${t.comments.length > 1 ? 's' : ''}</span>` : ''}
               ${t.images.length ? `<span class="badge">${t.images.length} capture${t.images.length > 1 ? 's' : ''}</span>` : ''}
-              ${t.link_tables.length ? `<span class="badge">${t.link_tables.length > 1 ? `${t.link_tables.length} tableaux Word` : 'Tableau Word'}</span>` : ''}
             </span>
           </div>
           <span class="timer" data-timer="${t.id}" title="Temps passé / estimé"></span>
@@ -471,17 +475,16 @@
 
   function renderTemplate() {
     const tasks = state.templateTasks;
-    const totalW = tasks.reduce((a, t) => a + t.weight, 0);
     const totalE = tasks.reduce((a, t) => a + t.estimated_minutes, 0);
     const rows = tasks.map((t, i) => `
-      <div class="tpl-row" data-tpl-id="${t.id}" tabindex="-1">
+      <div class="tpl-row" data-tpl-id="${t.id}">
         <span class="tpl-idx">${i + 1}</span>
         <div class="tpl-main">
           <strong>${esc(t.title)}</strong>
-          <div class="tpl-cmd">${t.commands.length ? esc(t.commands[0].text.split('\n')[0]) : '<i>pas de commande</i>'}${t.commands.length > 1 ? ` <span class="tpl-tag">+${t.commands.length - 1} commande${t.commands.length > 2 ? 's' : ''}</span>` : ''}${t.link_tables.length ? ` · <span class="tpl-tag">${t.link_tables.length} tableau${t.link_tables.length > 1 ? 'x' : ''} Word</span>` : ''}</div>
-          <div class="tpl-images">${thumbStrip('tpl', t.id, t.images, { small: true, addLabel: 'Capture de référence' })}</div>
+          <div class="tpl-blocks">${t.blocks.length ? t.blocks.map((b) => `<span class="tpl-blk" title="${esc(Blocks.get(b.type).label)}">${Blocks.get(b.type).icon}<span>${esc(Blocks.get(b.type).summary(b))}</span></span>`).join('')
+            : '<i class="muted">Aucun élément</i>'}</div>
         </div>
-        <div class="tpl-nums num"><span>Poids ${t.weight}</span><span>${t.estimated_minutes ? fmtDur(t.estimated_minutes * 60) : '—'}</span></div>
+        <div class="tpl-nums num"><span>${t.estimated_minutes ? fmtDur(t.estimated_minutes * 60) : '—'}</span></div>
         <div class="tpl-btns">
           <button class="btn icon ghost" data-act="tpl-move" data-dir="-1" data-id="${t.id}" aria-label="Monter" ${i === 0 ? 'disabled' : ''}>${ICONS.up}</button>
           <button class="btn icon ghost" data-act="tpl-move" data-dir="1" data-id="${t.id}" aria-label="Descendre" ${i === tasks.length - 1 ? 'disabled' : ''}>${ICONS.down}</button>
@@ -493,7 +496,7 @@
     return `
       <div class="head">
         <div>
-          <div class="eyebrow">${tasks.length} tâches · poids total ${totalW} · ${fmtDur(totalE * 60)} estimées</div>
+          <div class="eyebrow">${tasks.length} tâches · ${fmtDur(totalE * 60)} estimées</div>
           <h1>Modèle de tâches</h1>
           <div class="sub">Copié dans chaque nouvelle livraison. Les livraisons existantes ne sont pas modifiées.</div>
         </div>
@@ -502,8 +505,8 @@
       <div class="tpl-list">${rows || '<div class="tpl-row"><span></span><span class="tpl-main">Aucune tâche. Ajoutez la première.</span></div>'}</div>
       <div class="grid2">
         <section class="panel">
-          <h3>Variables disponibles dans les commandes</h3>
-          <p>Écrivez <code>{{version}}</code> dans une commande ou une description : la valeur de la livraison est substituée.</p>
+          <h3>Variables disponibles</h3>
+          <p>Écrivez <code>{{version}}</code> dans une commande, un lien, un programme, un tableau ou une description : la valeur de la livraison est substituée.</p>
           <div class="help-vars">${BUILTIN_VARS.map(([k, v]) => `<code>{{${k}}}</code><span>${v}</span>`).join('')}</div>
         </section>
         <section class="panel">
@@ -537,12 +540,12 @@
 
   // ---------------------------------------------------------------- modals
 
-  function modal({ title, body, submit = 'Enregistrer', onSubmit, onInput, danger }) {
+  function modal({ title, subtitle, body, submit = 'Enregistrer', onSubmit, onInput, onClose, danger, wide }) {
     const overlay = document.createElement('div');
     overlay.className = 'overlay';
     overlay.innerHTML = `
-      <form class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}">
-        <header><h2>${esc(title)}</h2></header>
+      <form class="modal${wide ? ' wide' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+        <header><h2>${esc(title)}</h2>${subtitle ? `<p class="modal-sub">${esc(subtitle)}</p>` : ''}</header>
         <div class="content">${body}<div class="error" hidden></div></div>
         <footer>
           <button type="button" class="btn" data-close>Annuler</button>
@@ -550,13 +553,12 @@
         </footer>
       </form>`;
     const form = overlay.querySelector('form');
-    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); onClose?.(); };
+    const onKey = (e) => { if (e.key === 'Escape' && !document.querySelector('.lightbox')) close(); };
     document.addEventListener('keydown', onKey);
     overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
     overlay.querySelector('[data-close]').onclick = close;
     if (onInput) form.addEventListener('input', () => onInput(form));
-    if (form.querySelector('[data-list]')) repEditor(form);
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const errEl = form.querySelector('.error');
@@ -587,76 +589,200 @@
     });
   }
 
-  function taskFormBody(t = {}, extra = '') {
-    return `
-      <div class="field"><label for="f-title">Titre</label>
-        <input type="text" id="f-title" name="title" required value="${esc(t.title)}"></div>
-      <div class="field"><label for="f-desc">Description</label>
-        <textarea id="f-desc" name="description" rows="3">${esc(t.description)}</textarea></div>
-      <div class="field"><label>Lignes de commande</label>
-        <div class="rep-list" data-list="commands">${(t.commands?.length ? t.commands : [{}]).map((c) => repRow('commands', c)).join('')}</div>
-        <div><button type="button" class="btn ghost" data-rep-add="commands">${ICONS.plus}Ajouter une commande</button></div>
-        <span class="hint">Chaque bloc a son bouton Copier. Variables : {{version}}, {{major}}, {{minor}}, {{patch}}, {{prev_version}}, {{date}} et vos variables personnalisées.</span></div>
-      <div class="field"><label>Tableaux pour Word (optionnels)</label>
-        <div class="rep-list" data-list="link_tables">${(t.link_tables || []).map((tb) => repRow('link_tables', tb)).join('')}</div>
-        <div><button type="button" class="btn ghost" data-rep-add="link_tables">${ICONS.plus}Ajouter un tableau Word</button></div>
-        <span class="hint">Une ligne par rangée, cellules séparées par <code>|</code>, la 1re ligne donne les en-têtes. Liens : <code>[texte](https://…)</code> ou URL brute. Variables acceptées.</span></div>
-      <div class="row2">
-        <div class="field"><label for="f-weight">Poids (progression)</label>
-          <input type="number" id="f-weight" name="weight" min="0" step="1" value="${t.weight ?? 1}"></div>
-        <div class="field"><label for="f-est">Temps estimé (minutes)</label>
-          <input type="number" id="f-est" name="estimated_minutes" min="0" step="1" value="${t.estimated_minutes ?? 10}"></div>
-      </div>${extra}`;
-  }
+  // ---------------------------------------------------------------- task editor
+  //
+  // One editor for template tasks and delivery tasks: general fields, then the ordered list of
+  // content blocks (see blocks.js). Blocks live in `ed.blocks`; the DOM is read back into it before
+  // any re-render or save.
 
-  // One editable entry of a repeated list (a command block or a Word table) in the task form.
-  function repRow(kind, item = {}) {
-    const isCmd = kind === 'commands';
-    return `<div class="rep-item" data-item>
-      <div class="rep-head">
-        <input type="text" data-k="${isCmd ? 'label' : 'title'}" value="${esc(isCmd ? item.label : item.title)}"
-               placeholder="${isCmd ? 'Libellé (optionnel) : Linux, Build, Rollback…' : 'Titre du tableau (optionnel) : Liens, Livrables…'}"
-               aria-label="${isCmd ? 'Libellé de la commande' : 'Titre du tableau'}">
-        <button type="button" class="btn icon ghost" data-rep-move="-1" aria-label="Monter">${ICONS.up}</button>
-        <button type="button" class="btn icon ghost" data-rep-move="1" aria-label="Descendre">${ICONS.down}</button>
-        <button type="button" class="btn ghost danger" data-rep-remove>Retirer</button>
-      </div>
-      <textarea data-k="${isCmd ? 'text' : 'spec'}" class="mono" rows="${isCmd ? 3 : 4}" aria-label="${isCmd ? 'Commande' : 'Contenu du tableau'}"
-        placeholder="${isCmd ? 'git tag -a v{{version}} -m &quot;Release {{version}}&quot;'
-          : 'Élément | Lien&#10;Notes de version | [Wiki {{version}}](https://wiki.example.com/releases/{{version}})&#10;Ticket | https://jira.example.com/browse/REL-{{version}}'}">${esc(isCmd ? item.text : item.spec)}</textarea>
-    </div>`;
-  }
+  function taskEditor(t, { title, subtitle, submit = 'Enregistrer', extra = '', onSave }) {
+    const ed = {
+      blocks: (t.blocks || []).map((b) => ({ ...b, files: b.files ? [...b.files] : b.files })),
+      open: new Set(),
+    };
+    if (ed.blocks.length <= 3) ed.blocks.forEach((b) => ed.open.add(b.id));
+    state.editor = ed;
 
-  function repEditor(form) {
+    const cardHtml = (b) => {
+      const type = Blocks.get(b.type);
+      const isOpen = ed.open.has(b.id);
+      return `<div class="ed-card${isOpen ? ' open' : ''}" data-card="${esc(b.id)}" data-type="${b.type}">
+        <div class="ed-card-head">
+          <span class="grip" data-ed="grip" title="Glisser pour déplacer" aria-hidden="true">⠿</span>
+          <button type="button" class="ed-toggle" data-ed="fold" aria-expanded="${isOpen}">
+            <span class="ed-type">${type.icon}${type.label}</span>
+            <span class="ed-sum">${esc(type.summary(b) || 'vide')}</span>
+          </button>
+          <button type="button" class="btn icon ghost" data-ed="up" aria-label="Monter">${ICONS.up}</button>
+          <button type="button" class="btn icon ghost" data-ed="down" aria-label="Descendre">${ICONS.down}</button>
+          <button type="button" class="btn icon ghost danger" data-ed="remove" aria-label="Supprimer l'élément" title="Supprimer l'élément">${ICONS.trash}</button>
+        </div>
+        <div class="ed-card-body">${type.editor(b, H)}</div>
+      </div>`;
+    };
+
+    const body = `
+      <section class="ed-section">
+        <h3>Général</h3>
+        <div class="ed-grid">
+          <label class="bf wide2"><span class="bf-label">Titre</span>
+            <input type="text" id="f-title" name="title" required value="${esc(t.title)}" placeholder="Déployer en recette"></label>
+          <label class="bf"><span class="bf-label">Temps estimé (minutes)</span>
+            <input type="number" id="f-est" name="estimated_minutes" min="0" step="1" value="${t.estimated_minutes ?? 10}">
+            <span class="hint">Sert aussi à la progression.</span></label>
+          <label class="bf wide3"><span class="bf-label">Description</span>
+            <textarea id="f-desc" name="description" rows="2" placeholder="Ce qu'il faut faire et vérifier.">${esc(t.description)}</textarea></label>
+        </div>
+      </section>
+      <section class="ed-section">
+        <div class="ed-section-head"><h3>Contenu</h3><span class="muted" data-ed-count></span></div>
+        <div class="ed-blocks" data-ed-list>${ed.blocks.map(cardHtml).join('')}</div>
+        <div class="ed-empty" data-ed-empty ${ed.blocks.length ? 'hidden' : ''}>Aucun élément : ajoutez une commande, un lien, un programme…</div>
+        <div class="ed-add">
+          <span class="bf-label">Ajouter</span>
+          <div class="ed-add-types">${Blocks.ORDER.map((k) => `<button type="button" class="ed-add-btn" data-ed="add" data-type="${k}" title="${esc(Blocks.get(k).hint)}">${Blocks.get(k).icon}${Blocks.get(k).label}</button>`).join('')}</div>
+        </div>
+        <details class="ed-help"><summary>Variables utilisables dans les éléments</summary>
+          <div class="help-vars">${BUILTIN_VARS.map(([k, v]) => `<code>{{${k}}}</code><span>${v}</span>`).join('')}
+            <code>{{…}}</code><span>et vos variables personnalisées (env, serveur…)</span></div></details>
+      </section>${extra}`;
+
+    const form = modal({
+      title, subtitle, submit, body, wide: true,
+      onClose: () => { if (state.editor === ed) state.editor = null; },
+      async onSubmit(f) {
+        sync(f);
+        const blocks = ed.blocks.filter((b) => !Blocks.get(b.type).isEmpty(b));
+        await onSave({
+          title: f.title.value.trim(),
+          description: f.description.value,
+          estimated_minutes: Number(f.estimated_minutes.value) || 0,
+          blocks,
+        }, f);
+      },
+    });
+    const list = form.querySelector('[data-ed-list]');
+
+    function sync(f = form) {
+      const byId = Object.fromEntries(ed.blocks.map((b) => [b.id, b]));
+      ed.blocks = [...f.querySelectorAll('[data-card]')].map((card) => {
+        const b = byId[card.dataset.card];
+        return Object.assign(b, Blocks.get(b.type).read(card, b));
+      });
+    }
+    // Re-render the cards from ed.blocks (callers sync() first when the DOM holds unsaved input).
+    function refresh() {
+      list.innerHTML = ed.blocks.map(cardHtml).join('');
+      counts();
+    }
+    function counts() {
+      form.querySelector('[data-ed-count]').textContent = ed.blocks.length
+        ? `${ed.blocks.length} élément${ed.blocks.length > 1 ? 's' : ''} · glisser ⠿ pour réordonner` : '';
+      form.querySelector('[data-ed-empty]').hidden = ed.blocks.length > 0;
+    }
+    counts();
+
+    async function addFiles(card, files) {
+      sync();
+      const b = ed.blocks.find((x) => x.id === card.dataset.card);
+      for (const file of files) {
+        if (!/^(image|video)\//.test(file.type)) continue;
+        const prepared = file.type.startsWith('image/') ? await toPngOrJpeg(file) : file;
+        b.files.push(await run(API.uploadMedia(prepared)));
+      }
+      refresh();
+    }
+
     form.addEventListener('click', (e) => {
-      const add = e.target.closest('[data-rep-add]');
-      const item = e.target.closest('[data-item]');
-      if (add) {
-        const list = form.querySelector(`[data-list="${add.dataset.repAdd}"]`);
-        list.insertAdjacentHTML('beforeend', repRow(add.dataset.repAdd));
-        list.lastElementChild.querySelector('textarea').focus();
-      } else if (item && e.target.closest('[data-rep-remove]')) {
-        item.remove();
-      } else if (item && e.target.closest('[data-rep-move]')) {
-        const dir = Number(e.target.closest('[data-rep-move]').dataset.repMove);
-        const other = dir < 0 ? item.previousElementSibling : item.nextElementSibling;
-        if (other) (dir < 0 ? other.before(item) : other.after(item));
+      const btn = e.target.closest('[data-ed]');
+      if (!btn) return;
+      const card = btn.closest('[data-card]');
+      const action = btn.dataset.ed;
+      if (action === 'add') {
+        sync();
+        const b = Blocks.create(btn.dataset.type);
+        ed.blocks.push(b);
+        ed.open.add(b.id);
+        refresh();
+        list.lastElementChild.querySelector('input, textarea')?.focus();
+        list.lastElementChild.scrollIntoView({ block: 'nearest' });
+      } else if (action === 'fold') {
+        sync();
+        ed.open.has(card.dataset.card) ? ed.open.delete(card.dataset.card) : ed.open.add(card.dataset.card);
+        refresh();
+      } else if (action === 'up' || action === 'down') {
+        const other = action === 'up' ? card.previousElementSibling : card.nextElementSibling;
+        if (other) (action === 'up' ? other.before(card) : other.after(card));
+        sync();
+      } else if (action === 'remove') {
+        card.remove();
+        sync();
+        counts();
+      } else if (action === 'media-add') {
+        card.querySelector('[data-ed-upload]').click();
+      } else if (action === 'media-remove') {
+        sync();
+        const b = ed.blocks.find((x) => x.id === card.dataset.card);
+        b.files = b.files.filter((f) => String(f.id) !== btn.dataset.file);
+        refresh();
       }
     });
+    form.addEventListener('change', (e) => {
+      if (e.target.matches('[data-ed-upload]')) addFiles(e.target.closest('[data-card]'), [...e.target.files]).catch(() => {});
+    });
+    form.addEventListener('input', (e) => {
+      const card = e.target.closest('[data-card]');
+      if (!card) return;
+      const b = ed.blocks.find((x) => x.id === card.dataset.card);
+      card.querySelector('.ed-sum').textContent = Blocks.get(b.type).summary(Blocks.get(b.type).read(card, b)) || 'vide';
+    });
+    form.addEventListener('paste', (e) => {
+      const card = e.target.closest('[data-card][data-type="media"]');
+      const files = [...(e.clipboardData?.files || [])];
+      if (card && files.length) { e.preventDefault(); e.stopPropagation(); addFiles(card, files).catch(() => {}); }
+    });
+
+    // Drag and drop: by the grip to reorder cards; files dropped on a media card are added to it.
+    let dragged = null;
+    list.addEventListener('mousedown', (e) => {
+      const grip = e.target.closest('[data-ed="grip"]');
+      if (grip) grip.closest('[data-card]').draggable = true;
+    });
+    list.addEventListener('dragstart', (e) => {
+      dragged = e.target.closest('[data-card]');
+      if (!dragged?.draggable) { dragged = null; return; }
+      dragged.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    list.addEventListener('dragover', (e) => {
+      const target = e.target.closest('[data-card]');
+      if (dragged && target && target !== dragged) {
+        e.preventDefault();
+        const box = target.getBoundingClientRect();
+        e.clientY < box.top + box.height / 2 ? target.before(dragged) : target.after(dragged);
+      } else if (!dragged && target?.dataset.type === 'media' && e.dataTransfer.types.includes('Files')) {
+        e.preventDefault();
+        target.classList.add('drop');
+      }
+    });
+    list.addEventListener('dragleave', (e) => e.target.closest('[data-card]')?.classList.remove('drop'));
+    list.addEventListener('drop', (e) => {
+      const target = e.target.closest('[data-card][data-type="media"]');
+      if (!dragged && target && e.dataTransfer.files.length) {
+        e.preventDefault();
+        target.classList.remove('drop');
+        addFiles(target, [...e.dataTransfer.files]).catch(() => {});
+      }
+    });
+    list.addEventListener('dragend', () => {
+      if (!dragged) return;
+      dragged.classList.remove('dragging');
+      dragged.draggable = false;
+      dragged = null;
+      sync();
+    });
+    return form;
   }
-
-  const listData = (form, kind, [k1, k2]) => [...form.querySelectorAll(`[data-list="${kind}"] [data-item]`)]
-    .map((row) => ({ [k1]: row.querySelector(`[data-k="${k1}"]`).value.trim(), [k2]: row.querySelector(`[data-k="${k2}"]`).value }))
-    .filter((x) => x[k2].trim());
-
-  const taskFormData = (form) => ({
-    title: form.title.value.trim(),
-    description: form.description.value,
-    commands: listData(form, 'commands', ['label', 'text']),
-    link_tables: listData(form, 'link_tables', ['title', 'spec']),
-    weight: Number(form.weight.value) || 0,
-    estimated_minutes: Number(form.estimated_minutes.value) || 0,
-  });
 
   async function deliveryModal(existing) {
     const tasks = existing ? existing.tasks : await API.listTasks();
@@ -700,9 +826,10 @@
 
   // ---------------------------------------------------------------- lightbox
 
+  // items: [{id, url, filename, mime?}] — images and videos.
   function lightbox(images, imgId) {
     const task = { images };
-    let idx = task.images.findIndex((i) => i.id === imgId);
+    let idx = task.images.findIndex((i) => String(i.id) === String(imgId));
     const el = document.createElement('div');
     el.className = 'lightbox';
     el.setAttribute('role', 'dialog');
@@ -711,7 +838,7 @@
       el.innerHTML = `
         <button class="close" aria-label="Fermer">✕</button>
         ${task.images.length > 1 ? '<button class="nav prev" aria-label="Précédente">‹</button><button class="nav next" aria-label="Suivante">›</button>' : ''}
-        <img src="${esc(img.url)}" alt="${esc(img.filename)}">
+        ${isVideo(img) ? `<video src="${esc(img.url)}" controls autoplay></video>` : `<img src="${esc(img.url)}" alt="${esc(img.filename)}">`}
         <div class="cap">${esc(img.filename)} · ${idx + 1} / ${task.images.length}</div>`;
     };
     const step = (n) => { idx = (idx + n + task.images.length) % task.images.length; show(); };
@@ -724,7 +851,7 @@
     el.addEventListener('click', (e) => {
       if (e.target.closest('.prev')) step(-1);
       else if (e.target.closest('.next')) step(1);
-      else if (e.target.tagName !== 'IMG') close();
+      else if (!['IMG', 'VIDEO'].includes(e.target.tagName)) close();
     });
     document.addEventListener('keydown', onKey);
     show();
@@ -759,43 +886,55 @@
   async function uploadFiles(scope, ownerId, files) {
     const images = [...files].filter((f) => f.type.startsWith('image/'));
     if (!images.length) return;
-    const upload = scope === 'tpl' ? API.uploadTemplateImage : API.uploadImage;
     let res;
-    for (const f of images) res = await run(toPngOrJpeg(f).then((png) => upload(ownerId, png)));
-    if (scope === 'tpl') {
-      state.templateTasks = res;
-      render();
-    } else {
-      await setDelivery(res);
-    }
+    for (const f of images) res = await run(toPngOrJpeg(f).then((png) => API.uploadImage(ownerId, png)));
+    await setDelivery(res);
     toast(images.length > 1 ? `${images.length} images ajoutées` : 'Image ajoutée');
   }
 
-  async function copyCommand(btn, taskId, idx) {
-    const t = state.delivery.tasks.find((x) => x.id === taskId);
-    const text = renderText(t.commands[idx].text, buildVariables(state.delivery));
+  // Block of a delivery task, from an element inside its rendering.
+  function blockOf(el) {
+    const host = el.closest('[data-block]');
+    const task = state.delivery.tasks.find((t) => t.id === Number(host.dataset.task));
+    return { task, block: task.blocks.find((b) => b.id === host.dataset.block) };
+  }
+
+  // Any block currently shown (open editor, delivery or template), by id.
+  function findBlock(id) {
+    const pools = [state.editor?.blocks || [], ...(state.delivery?.tasks || []).map((t) => t.blocks),
+      ...state.templateTasks.map((t) => t.blocks)];
+    for (const blocks of pools) {
+      const b = blocks.find((x) => x.id === id);
+      if (b) return b;
+    }
+    return null;
+  }
+
+  async function copyText(btn, text, selectEl) {
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      const range = document.createRange();
-      range.selectNodeContents(btn.parentElement.querySelector('pre'));
-      getSelection().removeAllRanges();
-      getSelection().addRange(range);
-      toast('Copie automatique refusée : texte sélectionné, faites Ctrl+C');
+      if (selectEl) {
+        const range = document.createRange();
+        range.selectNodeContents(selectEl);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+      }
+      toast(`Copie automatique refusée. Texte : ${text}`);
       return;
     }
+    const label = btn.textContent;
     btn.textContent = 'Copié ✓';
     btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'Copier'; btn.classList.remove('copied'); }, 1500);
+    setTimeout(() => { btn.textContent = label; btn.classList.remove('copied'); }, 1500);
   }
 
-  // idx = one table; null = all of them, each preceded by its title.
-  async function copyTable(btn, taskId, idx) {
-    const t = state.delivery.tasks.find((x) => x.id === taskId);
+  // blockId = one table block; null = every table of the task, each preceded by its title.
+  async function copyTable(btn, task, blockId) {
     const vars = buildVariables(state.delivery);
-    let tables = t.link_tables.map((tb) => ({ title: renderText(tb.title, vars), table: parseTable(tb.spec, vars) }))
+    const tables = task.blocks.filter((b) => b.type === 'table' && (blockId === null || b.id === blockId))
+      .map((b) => ({ title: renderText(b.title, vars), table: parseTable(b.spec, vars) }))
       .filter((tb) => tb.table);
-    if (idx !== null) tables = [tables[idx]];
     const withTitles = tables.length > 1;
     const titleStyle = 'font-family:Calibri,Arial,sans-serif;font-size:11pt;font-weight:bold;margin:12pt 0 4pt;';
     const html = tables.map(({ title, table }) => (withTitles && title ? `<p style="${titleStyle}">${esc(title)}</p>` : '')
@@ -860,10 +999,26 @@
       if (action === 'done' || action === 'skip') state.expanded.delete(id);
       await setDelivery(d);
     },
-    copy: (el) => copyCommand(el, Number(el.dataset.id), Number(el.dataset.idx)),
-    'copy-table': (el) => copyTable(el, Number(el.dataset.id), el.dataset.idx === undefined ? null : Number(el.dataset.idx)),
-    'table-docx': (el) => run(API.exportTaskTable(Number(el.dataset.id),
-      el.dataset.idx === undefined ? null : Number(el.dataset.idx))),
+    'blk-copy': (el) => {
+      const { block } = blockOf(el);
+      const vars = buildVariables(state.delivery);
+      const text = renderText(block.type === 'link' ? block.url : block.text, vars);
+      return copyText(el, text, el.closest('[data-block]').querySelector('pre, .link-url'));
+    },
+    'blk-launch': async (el) => {
+      const { task, block } = blockOf(el);
+      const res = await run(API.launchProgram(task.id, block.id));
+      toast(res.message || `${block.name || 'Programme'} lancé`);
+    },
+    'blk-copy-table': (el) => { const { task, block } = blockOf(el); return copyTable(el, task, block.id); },
+    'blk-table-docx': (el) => { const { task, block } = blockOf(el); return run(API.exportTaskTable(task.id, block.id)); },
+    'copy-all-tables': (el) => copyTable(el, state.delivery.tasks.find((t) => t.id === Number(el.dataset.task)), null),
+    'all-tables-docx': (el) => run(API.exportTaskTable(Number(el.dataset.task), null)),
+    'media-open': (el) => {
+      const host = el.closest('[data-block], [data-card]');
+      const block = findBlock(host.dataset.block || host.dataset.card);
+      lightbox(block.files, el.dataset.file);
+    },
     comment: (el) => postComment(Number(el.dataset.id)),
     async 'delete-comment'(el) {
       if (!(await confirmBox('Supprimer ce commentaire ?'))) return;
@@ -872,12 +1027,6 @@
     'add-image': (el) => document.querySelector(`[data-upload="${el.dataset.scope}:${el.dataset.id}"]`).click(),
     lightbox: (el) => lightbox(imagesOf(el.dataset.scope, Number(el.dataset.owner)), Number(el.dataset.img)),
     async 'delete-image'(el) {
-      if (el.dataset.scope === 'tpl') {
-        if (!(await confirmBox("Supprimer cette capture du modèle ? Les livraisons existantes gardent leur copie."))) return;
-        state.templateTasks = await run(API.deleteTemplateImage(Number(el.dataset.id)));
-        render();
-        return;
-      }
       if (!(await confirmBox("Supprimer cette image ?"))) return;
       await setDelivery(await run(API.deleteImage(Number(el.dataset.id))));
     },
@@ -887,12 +1036,11 @@
     },
     'edit-task': (el) => {
       const t = state.delivery.tasks.find((x) => x.id === Number(el.dataset.id));
-      modal({
+      taskEditor(t, {
         title: 'Modifier la tâche',
-        body: taskFormBody(t, t.template_task_id ? `
-          <label class="check"><input type="checkbox" name="sync"> Répercuter aussi dans le modèle (prochaines livraisons)</label>` : ''),
-        async onSubmit(form) {
-          const data = taskFormData(form);
+        subtitle: `Livraison ${state.delivery.version} uniquement, sauf si vous cochez la case en bas.`,
+        extra: t.template_task_id ? `<label class="check ed-sync"><input type="checkbox" name="sync"> Appliquer aussi au modèle (prochaines livraisons)</label>` : '',
+        async onSave(data, form) {
           const d = await API.updateDeliveryTask(t.id, data);
           if (form.sync?.checked) await API.updateTask(t.template_task_id, data);
           await setDelivery(d);
@@ -900,12 +1048,13 @@
         },
       });
     },
-    'add-delivery-task': () => modal({
+    'add-delivery-task': () => taskEditor({ blocks: [Blocks.create('command')] }, {
       title: 'Ajouter une tâche',
+      subtitle: `À la livraison ${state.delivery.version}.`,
       submit: 'Ajouter',
-      body: taskFormBody({}, '<label class="check"><input type="checkbox" name="tpl" checked> Ajouter aussi au modèle pour les prochaines livraisons</label>'),
-      async onSubmit(form) {
-        const d = await API.addDeliveryTask(state.delivery.id, { ...taskFormData(form), add_to_template: form.tpl.checked });
+      extra: '<label class="check ed-sync"><input type="checkbox" name="tpl" checked> Ajouter aussi au modèle pour les prochaines livraisons</label>',
+      async onSave(data, form) {
+        const d = await API.addDeliveryTask(state.delivery.id, { ...data, add_to_template: form.tpl.checked });
         await setDelivery(d);
         toast('Tâche ajoutée');
       },
@@ -939,20 +1088,23 @@
       render();
     },
     export: (el) => run(API.exportReport(state.delivery.id, el.dataset.fmt)),
-    'tpl-add': () => modal({
-      title: 'Nouvelle tâche du modèle', submit: 'Ajouter', body: taskFormBody(),
-      async onSubmit(form) {
-        await API.createTask(taskFormData(form));
+    'tpl-add': () => taskEditor({ blocks: [Blocks.create('command')] }, {
+      title: 'Nouvelle tâche du modèle',
+      subtitle: 'Elle sera copiée dans chaque nouvelle livraison.',
+      submit: 'Ajouter',
+      async onSave(data) {
+        await API.createTask(data);
         await openTemplate();
         toast('Tâche ajoutée au modèle');
       },
     }),
     'tpl-edit': (el) => {
       const t = state.templateTasks.find((x) => x.id === Number(el.dataset.id));
-      modal({
-        title: 'Modifier la tâche du modèle', body: taskFormBody(t),
-        async onSubmit(form) {
-          await API.updateTask(t.id, taskFormData(form));
+      taskEditor(t, {
+        title: 'Modifier la tâche du modèle',
+        subtitle: 'Les modifications s\'appliquent aux prochaines livraisons ; les livraisons existantes ne changent pas.',
+        async onSave(data) {
+          await API.updateTask(t.id, data);
           await openTemplate();
           toast('Modèle mis à jour');
         },
@@ -995,7 +1147,7 @@
     const thumb = e.target.closest?.('.thumb');
     if (thumb && (e.key === 'Enter' || e.key === ' ') && e.target === thumb) {
       e.preventDefault();
-      lightbox(imagesOf(thumb.dataset.scope, Number(thumb.dataset.owner)), Number(thumb.dataset.img));
+      thumb.click();
     }
     if (e.target.dataset?.comment && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -1020,12 +1172,11 @@
 
   // Paste a screenshot while focused inside a task (delivery or template) to attach it.
   document.addEventListener('paste', (e) => {
-    const card = e.target.closest?.('[data-task-id], [data-tpl-id]');
+    const card = e.target.closest?.('[data-task-id]');
     const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
-    if (!card || !files.length) return;
+    if (!card || !files.length || e.target.closest('.modal')) return;
     e.preventDefault();
-    const tpl = card.dataset.tplId;
-    uploadFiles(tpl ? 'tpl' : 'task', Number(tpl || card.dataset.taskId), files).catch(() => {});
+    uploadFiles('task', Number(card.dataset.taskId), files).catch(() => {});
   });
 
   // ---------------------------------------------------------------- boot

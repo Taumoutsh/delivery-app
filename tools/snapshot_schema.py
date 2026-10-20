@@ -30,6 +30,14 @@ def populate(db):
                              "weight": 2, "estimated_minutes": 5})
     if hasattr(db, "add_template_image"):  # schema v4+
         db.add_template_image(db.list_template_tasks()[0]["id"], "reference.png", "image/png", PNG)
+    if hasattr(db, "add_media"):  # schema v5+: content blocks
+        image = db.add_media("reference.png", "image/png", PNG)
+        tpl = db.list_template_tasks()[0]
+        db.update_template_task(tpl["id"], {"blocks": tpl["blocks"] + [
+            {"type": "link", "label": "Pipeline", "url": "https://ci.example.com/{{version}}"},
+            {"type": "program", "name": "Outil", "path": "/opt/outil", "args": "--v {{version}}"},
+            {"type": "note", "text": "Consigne"},
+            {"type": "media", "title": "Écran attendu", "files": [image]}]})
     closed = db.create_delivery({"version": "1.0.0", "name": "Ancienne livraison",
                                  "variables": {"prev_version": "0.9.0", "env": "prod"}})
     for t in closed["tasks"]:

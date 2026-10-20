@@ -10,6 +10,7 @@ import sqlite3
 import struct
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -47,9 +48,11 @@ class ApiTest(unittest.TestCase):
         cls.db.conn.close()
         cls.tmp.cleanup()
 
-    def call(self, method, path, body=None, raw=None, headers=None):
+    def call(self, method, path, body=None, raw=None, headers=None, app=True):
+        """API call as the UI makes it (app=False: without the X-Checklist header)."""
         data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
-        req = urllib.request.Request(self.base + path, data=data, method=method, headers=headers or {})
+        req = urllib.request.Request(self.base + path, data=data, method=method,
+                                     headers={**({"X-Checklist": "1"} if app else {}), **(headers or {})})
         try:
             with urllib.request.urlopen(req) as res:
                 payload = res.read()
@@ -73,12 +76,14 @@ class ApiTest(unittest.TestCase):
         self.assertIsNotNone(d["tasks"][0]["running_since"])
         _, d = self.call("POST", f"/api/delivery-tasks/{first['id']}/action", {"action": "done"})
         self.assertEqual(d["tasks"][0]["status"], "done")
-        total = sum(t["weight"] for t in d["tasks"])
-        self.assertEqual(d["progress"], round(100 * first["weight"] / total))
+        # Progress is weighted by estimated time.
+        total = sum(max(1, t["estimated_minutes"]) for t in d["tasks"])
+        self.assertEqual(d["progress"], round(100 * first["estimated_minutes"] / total))
+        self.assertNotIn("weight", first)
 
         # Skipped tasks leave the denominator.
         _, d = self.call("POST", f"/api/delivery-tasks/{second['id']}/action", {"action": "skip"})
-        self.assertEqual(d["progress"], round(100 * first["weight"] / (total - second["weight"])))
+        self.assertEqual(d["progress"], round(100 * first["estimated_minutes"] / (total - second["estimated_minutes"])))
 
         _, d = self.call("POST", f"/api/delivery-tasks/{first['id']}/comments", {"body": "RAS"})
         self.assertEqual(d["tasks"][0]["comments"][0]["body"], "RAS")
@@ -99,15 +104,16 @@ class ApiTest(unittest.TestCase):
             self.assertIn("word/media/image1.png", z.namelist())
             self.assertIn("https://wiki.example.com/releases/3.1.0", z.read("word/_rels/document.xml.rels").decode())
 
-        with_tables = next(t for t in d["tasks"] if len(t["link_tables"]) > 1)
-        for path, count in (("tables.docx", len(with_tables["link_tables"])), ("table.docx", 2), ("tables/1.docx", 1)):
+        with_tables = next(t for t in d["tasks"] if sum(b["type"] == "table" for b in t["blocks"]) > 1)
+        second_table = [b for b in with_tables["blocks"] if b["type"] == "table"][1]
+        for path, count in (("tables.docx", 2), ("table.docx", 2), (f"tables/{second_table['id']}.docx", 1)):
             status, data = self.call("GET", f"/api/delivery-tasks/{with_tables['id']}/{path}")
             self.assertEqual(status, 200, path)
             with zipfile.ZipFile(io.BytesIO(data)) as z:
                 document = z.read("word/document.xml").decode()
                 self.assertEqual(document.count("<w:tbl>"), count, path)
                 self.assertIn("<w:hyperlink", document)
-        self.assertEqual(self.call("GET", f"/api/delivery-tasks/{with_tables['id']}/tables/9.docx")[0], 400)
+        self.assertEqual(self.call("GET", f"/api/delivery-tasks/{with_tables['id']}/tables/inconnu.docx")[0], 400)
         self.assertEqual(self.call("GET", f"/api/delivery-tasks/{first['id']}/tables.docx")[0], 400)
 
         _, d = self.call("PUT", f"/api/deliveries/{d['id']}", {"status": "done"})
@@ -126,52 +132,110 @@ class ApiTest(unittest.TestCase):
     def test_add_task_to_delivery_and_template(self):
         _, before = self.call("GET", "/api/tasks")
         _, d = self.call("POST", "/api/deliveries", {"version": "1.2.0"})
-        _, d = self.call("POST", f"/api/deliveries/{d['id']}/tasks",
-                         {"title": "Nouvelle", "weight": 2, "estimated_minutes": 5, "add_to_template": True,
-                          "commands": [{"label": " Linux ", "text": "echo {{version}}"}, {"label": "vide", "text": "  "},
-                                       {"text": "dir"}],
-                          "link_tables": [{"title": "A", "spec": "x | y"}, {"title": "B", "spec": ""}]})
+        _, d = self.call("POST", f"/api/deliveries/{d['id']}/tasks", {
+            "title": "Nouvelle", "estimated_minutes": 5, "add_to_template": True, "blocks": [
+                {"id": "c1", "type": "command", "label": " Linux ", "text": "echo {{version}}"},
+                {"type": "command", "label": "vide", "text": "  "},
+                {"type": "link", "label": "CI", "url": " https://ci/{{version}} "},
+                {"type": "program", "name": "Outil", "path": "/usr/bin/true", "args": "--v {{version}}"},
+                {"type": "note", "text": "Attention"},
+                {"type": "table", "title": "A", "spec": "x | y"}, {"type": "table", "title": "B", "spec": ""}]})
         task = d["tasks"][-1]
         self.assertEqual(task["title"], "Nouvelle")
-        self.assertEqual(task["commands"], [{"label": "Linux", "text": "echo {{version}}"}, {"label": "", "text": "dir"}])
-        self.assertEqual(task["link_tables"], [{"title": "A", "spec": "x | y"}])
-        self.assertNotIn("command", task)
+        self.assertEqual([b["type"] for b in task["blocks"]], ["command", "link", "program", "note", "table"])
+        self.assertEqual(task["blocks"][0], {"id": "c1", "type": "command", "label": "Linux", "text": "echo {{version}}"})
+        self.assertEqual(task["blocks"][1]["url"], "https://ci/{{version}}")
+        self.assertTrue(all(b["id"] for b in task["blocks"]))
         _, d = self.call("PUT", f"/api/delivery-tasks/{task['id']}", {"title": "Renommée"})
-        self.assertEqual(d["tasks"][-1]["commands"], task["commands"])  # untouched lists are kept
+        self.assertEqual(d["tasks"][-1]["blocks"], task["blocks"])  # untouched blocks are kept
         _, after = self.call("GET", "/api/tasks")
         self.assertEqual(len(after), len(before) + 1)
+        status, body = self.call("PUT", f"/api/delivery-tasks/{task['id']}", {"blocks": [{"type": "inconnu"}]})
+        self.assertEqual(status, 400)
 
-    def test_template_screenshots_are_copied_into_deliveries(self):
+    def upload(self, path, data, mime, name):
+        return self.call("POST", path, raw=data, headers={"Content-Type": mime, "X-Filename": name})
+
+    def test_media_blocks_are_shared_with_deliveries_without_rewriting_history(self):
+        status, image = self.upload("/api/media", PNG, "image/png", "attendu.png")
+        self.assertEqual(status, 200)
+        video = b"\x00\x00\x00\x18ftypmp42" + bytes(range(256)) * 4
+        _, clip = self.upload("/api/media", video, "video/mp4", "demo.mp4")
         _, tasks = self.call("GET", "/api/tasks")
         tpl = tasks[1]
-        status, tasks = self.call("POST", f"/api/tasks/{tpl['id']}/images", raw=PNG,
-                                  headers={"Content-Type": "image/png", "X-Filename": "attendu.png"})
-        self.assertEqual(status, 200)
-        ref = next(t for t in tasks if t["id"] == tpl["id"])["images"][0]
-        self.assertEqual(self.call("GET", ref["url"])[1], PNG)
+        _, tpl = self.call("PUT", f"/api/tasks/{tpl['id']}", {"blocks": tpl["blocks"] + [
+            {"type": "media", "title": "Écran attendu", "files": [image, {"id": clip["id"]}]}]})
+        media = tpl["blocks"][-1]
+        self.assertEqual([f["filename"] for f in media["files"]], ["attendu.png", "demo.mp4"])
+        self.assertEqual(self.call("GET", media["files"][0]["url"])[1], PNG)
+
+        # Videos can be read by ranges (seeking in the player).
+        req = urllib.request.Request(self.base + clip["url"], headers={"Range": "bytes=10-19"})
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual(res.status, 206)
+            self.assertEqual(res.read(), video[10:20])
+            self.assertEqual(res.headers["Content-Range"], f"bytes 10-19/{len(video)}")
 
         _, d = self.call("POST", "/api/deliveries", {"version": "4.0.0"})
         task = next(t for t in d["tasks"] if t["template_task_id"] == tpl["id"])
-        self.assertEqual([(i["filename"], i["reference"]) for i in task["images"]], [("attendu.png", True)])
+        self.assertEqual(task["blocks"][-1]["files"], media["files"])
 
-        # Removing it from the template leaves the delivery's copy alone (history is never rewritten).
-        _, tasks = self.call("DELETE", ref["url"])
-        self.assertEqual(next(t for t in tasks if t["id"] == tpl["id"])["images"], [])
+        # Removing the files from the template leaves the delivery's element alone.
+        self.call("PUT", f"/api/tasks/{tpl['id']}", {"blocks": tpl["blocks"][:-1]})
+        self.assertEqual(self.db.collect_media(), 0)  # still used by the delivery (and recent anyway)
         _, d = self.call("GET", f"/api/deliveries/{d['id']}")
         task = next(t for t in d["tasks"] if t["template_task_id"] == tpl["id"])
-        self.assertEqual(len(task["images"]), 1)
+        self.assertEqual(len(task["blocks"][-1]["files"]), 2)
 
-        # A screenshot taken during a delivery can become the template's reference.
-        _, d = self.call("POST", f"/api/delivery-tasks/{task['id']}/images", raw=PNG,
-                         headers={"Content-Type": "image/png", "X-Filename": "nouvelle.png"})
-        own = next(i for i in next(t for t in d["tasks"] if t["id"] == task["id"])["images"] if not i["reference"])
-        status, _ = self.call("POST", f"/api/images/{own['id']}/to-template")
-        self.assertEqual(status, 200)
+        # A screenshot taken during a delivery can join the template's media element.
+        _, d = self.upload(f"/api/delivery-tasks/{task['id']}/images", PNG, "image/png", "nouvelle.png")
+        own = next(t for t in d["tasks"] if t["id"] == task["id"])["images"][0]
+        self.assertEqual(self.call("POST", f"/api/images/{own['id']}/to-template")[0], 200)
         _, tasks = self.call("GET", "/api/tasks")
-        self.assertEqual([i["filename"] for i in next(t for t in tasks if t["id"] == tpl["id"])["images"]],
-                         ["nouvelle.png"])
+        tpl_media = next(t for t in tasks if t["id"] == tpl["id"])["blocks"][-1]
+        self.assertEqual((tpl_media["title"], [f["filename"] for f in tpl_media["files"]]),
+                         ("Captures de référence", ["nouvelle.png"]))
         for fmt in ("pdf", "docx"):
-            self.assertEqual(self.call("GET", f"/api/deliveries/{d['id']}/report.{fmt}")[0], 200)
+            status, data = self.call("GET", f"/api/deliveries/{d['id']}/report.{fmt}")
+            self.assertEqual(status, 200)
+        self.assertIn("demo.mp4", data.decode("latin-1") if False else zipfile.ZipFile(io.BytesIO(data))
+                      .read("word/document.xml").decode())
+        self.assertEqual(self.upload("/api/media", b"x", "application/zip", "a.zip")[0], 415)
+
+    def test_launch_program_block(self):
+        marker = Path(self.tmp.name) / "lance.txt"
+        script = Path(self.tmp.name) / "outil.sh"
+        script.write_text(f'#!/bin/sh\necho "$@" > "{marker}"\n')
+        script.chmod(0o755)
+        _, d = self.call("POST", "/api/deliveries", {"version": "7.1.0"})
+        _, d = self.call("POST", f"/api/deliveries/{d['id']}/tasks", {"title": "Lancer", "blocks": [
+            {"id": "p1", "type": "program", "name": "Outil", "path": str(script), "args": "--version {{version}}"},
+            {"id": "p2", "type": "program", "name": "Absent", "path": "/nulle/part/outil"}]})
+        task = d["tasks"][-1]
+        status, body = self.call("POST", f"/api/delivery-tasks/{task['id']}/blocks/p1/launch")
+        self.assertEqual(status, 200, body)
+        for _ in range(50):
+            if marker.exists() and marker.read_text().strip():
+                break
+            time.sleep(0.05)
+        self.assertEqual(marker.read_text().strip(), "--version 7.1.0")
+        status, body = self.call("POST", f"/api/delivery-tasks/{task['id']}/blocks/p2/launch")
+        self.assertEqual(status, 422)
+        self.assertIn("introuvable", body["error"])
+        self.assertEqual(self.call("POST", f"/api/delivery-tasks/{task['id']}/blocks/zz/launch")[0], 404)
+        # Refused without the app header (a page from another site cannot add it).
+        self.assertEqual(self.call("POST", f"/api/delivery-tasks/{task['id']}/blocks/p1/launch", app=False)[0], 403)
+        self.server.RequestHandlerClass.allow_launch = False
+        try:
+            self.assertEqual(self.call("POST", f"/api/delivery-tasks/{task['id']}/blocks/p1/launch")[0], 403)
+        finally:
+            self.server.RequestHandlerClass.allow_launch = True
+
+    def test_requests_from_other_sites_are_refused(self):
+        self.assertEqual(self.call("POST", "/api/deliveries", {"version": "9"}, app=False)[0], 403)
+        self.assertEqual(self.call("DELETE", "/api/tasks/1", app=False)[0], 403)
+        self.assertEqual(self.call("GET", "/api/tasks", headers={"Host": "evil.example:8765"})[0], 403)
+        self.assertEqual(self.call("GET", "/api/tasks", app=False)[0], 200)
 
     def test_static_files_and_traversal(self):
         req = urllib.request.urlopen(self.base + "/fonts/fonts.css")
@@ -262,7 +326,14 @@ class RenderTest(unittest.TestCase):
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
-TABLES = ("settings", "template_tasks", "deliveries", "delivery_tasks", "comments", "images")
+TABLES = ("settings", "template_tasks", "deliveries", "delivery_tasks", "comments")
+FILE_TABLES = ("images", "template_images", "media")  # files may move between them, never vanish
+
+
+def all_files(conn):
+    """Every stored file (sorted bytes), whatever table holds it."""
+    present = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    return sorted(bytes(r[0]) for t in FILE_TABLES if t in present for r in conn.execute(f"SELECT data FROM {t}"))
 
 
 def load_fixture(version, directory):
@@ -305,7 +376,7 @@ class CompatibilityTest(unittest.TestCase):
                     raw = sqlite3.connect(str(path))
                     counts = {t: raw.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in TABLES}
                     comments = raw.execute("SELECT body FROM comments ORDER BY id").fetchall()
-                    images = raw.execute("SELECT data FROM images ORDER BY id").fetchall()
+                    files = all_files(raw)
                     raw.close()
 
                     db = Database(path)
@@ -313,7 +384,7 @@ class CompatibilityTest(unittest.TestCase):
                     for table, count in counts.items():
                         self.assertEqual(db.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], count, table)
                     self.assertEqual([tuple(r) for r in db.conn.execute("SELECT body FROM comments ORDER BY id")], comments)
-                    self.assertEqual([tuple(r) for r in db.conn.execute("SELECT data FROM images ORDER BY id")], images)
+                    self.assertEqual(all_files(db.conn), files)
                     if version < dbmod.SCHEMA_VERSION:
                         self.assertTrue(db.backup_path and db.backup_path.exists())
 
@@ -327,19 +398,33 @@ class CompatibilityTest(unittest.TestCase):
                     self.assertGreater(d["progress"], 0)
                     db.conn.close()
 
-    def test_v2_single_command_and_table_become_lists(self):
+    def test_older_contents_become_blocks(self):
+        """v2 command + table, v3 lists and v4 reference screenshots all end up as blocks."""
         with tempfile.TemporaryDirectory() as tmp:
-            path = load_fixture(2, tmp)
-            raw = sqlite3.connect(str(path))
-            legacy = {r[0]: (r[1], r[2]) for r in raw.execute("SELECT id, command, table_spec FROM delivery_tasks")}
-            raw.close()
-            db = Database(path)
-            for task_id, (command, spec) in legacy.items():
-                task = db.get_delivery_task(task_id)
-                self.assertEqual(task["commands"], [{"label": "", "text": command}] if command.strip() else [])
-                self.assertEqual(task["link_tables"], [{"title": "", "spec": spec}] if spec.strip() else [])
-            self.assertTrue(any(spec.strip() for _, spec in legacy.values()))
-            db.conn.close()
+            for version in (2, 3, 4):
+                path = load_fixture(version, tmp)
+                raw = sqlite3.connect(str(path))
+                if version == 2:
+                    legacy = {r[0]: ([("command", r[1])] if r[1].strip() else []) + ([("table", r[2])] if r[2].strip() else [])
+                              for r in raw.execute("SELECT id, command, table_spec FROM delivery_tasks")}
+                else:
+                    legacy = {r[0]: [("command", c["text"]) for c in json.loads(r[1])]
+                              + [("table", t["spec"]) for t in json.loads(r[2])]
+                              for r in raw.execute("SELECT id, commands, link_tables FROM delivery_tasks")}
+                refs = (raw.execute("SELECT COUNT(*) FROM images WHERE reference=1").fetchone()[0]
+                        if version == 4 else 0)
+                raw.close()
+                db = Database(path)
+                media_files = 0
+                for task_id, expected in legacy.items():
+                    blocks = db.get_delivery_task(task_id)["blocks"]
+                    content = [(b["type"], b["text"] if b["type"] == "command" else b["spec"])
+                               for b in blocks if b["type"] in ("command", "table")]
+                    self.assertEqual(content, expected, f"v{version} task {task_id}")
+                    media_files += sum(len(b["files"]) for b in blocks if b["type"] == "media")
+                self.assertEqual(media_files, refs)
+                self.assertEqual(db.conn.execute("SELECT COUNT(*) FROM images WHERE reference=1").fetchone()[0], 0)
+                db.conn.close()
 
     def test_newer_database_is_refused_untouched(self):
         with tempfile.TemporaryDirectory() as tmp:
