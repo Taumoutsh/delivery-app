@@ -1,0 +1,5 @@
+# Le serveur n'utilise que la bibliothèque standard.
+# Ces paquets servent uniquement à l'export des rapports.
+python-docx>=1.1
+reportlab>=4.0
+pillow>=10.0
