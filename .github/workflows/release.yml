@@ -1,0 +1,48 @@
+# Publishes a GitHub release when a version tag (vX.Y.Z) is pushed.
+# The tag must match delivery_app.__version__ and have a section in CHANGELOG.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        python: ["3.8", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m unittest discover -s tests -q
+
+  release:
+    needs: test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build assets
+        run: python tools/build_release.py --skip-tests
+      - name: Check tag matches the app version
+        if: github.ref_type == 'tag'
+        run: |
+          version=$(python -c "import delivery_app; print(delivery_app.__version__)")
+          test "${GITHUB_REF_NAME}" = "v${version}" || { echo "Tag ${GITHUB_REF_NAME} != v${version}"; exit 1; }
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python -c "import delivery_app; print(delivery_app.__version__)")
+          gh release create "v${version}" dist/*.pyz dist/*.zip dist/SHA256SUMS.txt \
+            --title "Checklist Livraison ${version}" --notes-file dist/RELEASE_NOTES.md \
+            --target "${GITHUB_SHA}"
