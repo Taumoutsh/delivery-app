@@ -1,12 +1,13 @@
 """SQLite storage: schema, migrations and data-access helpers."""
 
 import json
-import re
 import sqlite3
 import threading
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 1
+from .templating import build_variables, render_command  # noqa: F401 (re-exported)
+
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -21,6 +22,7 @@ CREATE TABLE IF NOT EXISTS template_tasks (
     title             TEXT    NOT NULL,
     description       TEXT    NOT NULL DEFAULT '',
     command           TEXT    NOT NULL DEFAULT '',
+    table_spec        TEXT    NOT NULL DEFAULT '',
     weight            INTEGER NOT NULL DEFAULT 1,
     estimated_minutes INTEGER NOT NULL DEFAULT 0,
     created_at        TEXT    NOT NULL,
@@ -46,6 +48,7 @@ CREATE TABLE IF NOT EXISTS delivery_tasks (
     title             TEXT    NOT NULL,
     description       TEXT    NOT NULL DEFAULT '',
     command           TEXT    NOT NULL DEFAULT '',
+    table_spec        TEXT    NOT NULL DEFAULT '',
     weight            INTEGER NOT NULL DEFAULT 1,
     estimated_minutes INTEGER NOT NULL DEFAULT 0,
     status            TEXT    NOT NULL DEFAULT 'todo', -- todo | running | paused | done | skipped
@@ -105,11 +108,12 @@ SEED_TASKS = [
     ("Rédiger les notes de version",
      "Résumé des changements depuis {{prev_version}}, à envoyer à l'équipe.",
      "",
-     2, 20),
+     2, 20,
+     "Élément | Lien\n"
+     "Notes de version {{version}} | [Wiki — release {{version}}](https://wiki.example.com/releases/{{version}})\n"
+     "Tag Git | [v{{version}}](https://git.example.com/app/-/tags/v{{version}})\n"
+     "Comparaison | [v{{prev_version}}...v{{version}}](https://git.example.com/app/-/compare/v{{prev_version}}...v{{version}})"),
 ]
-
-_PLACEHOLDER = re.compile(r"\{\{\s*([\w.-]+)\s*\}\}")
-
 
 def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -117,26 +121,6 @@ def now_iso():
 
 def parse_iso(value):
     return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-
-
-def build_variables(delivery):
-    """Built-in variables derived from the delivery, overridden by custom ones."""
-    version = delivery["version"]
-    parts = re.split(r"[.\-+]", version)
-    values = {
-        "version": version,
-        "major": parts[0] if len(parts) > 0 else "",
-        "minor": parts[1] if len(parts) > 1 else "",
-        "patch": parts[2] if len(parts) > 2 else "",
-        "date": (delivery.get("created_at") or now_iso())[:10],
-        "name": delivery.get("name") or "",
-    }
-    values.update({k: str(v) for k, v in (delivery.get("variables") or {}).items()})
-    return values
-
-
-def render_command(text, variables):
-    return _PLACEHOLDER.sub(lambda m: variables.get(m.group(1), m.group(0)), text or "")
 
 
 def live_elapsed(task):
@@ -175,12 +159,21 @@ class Database:
                 self.conn.execute("INSERT INTO settings VALUES ('default_variables', ?)",
                                   (json.dumps({"prev_version": ""}),))
                 ts = now_iso()
-                for pos, (title, desc, cmd, weight, est) in enumerate(SEED_TASKS):
+                for pos, seed in enumerate(SEED_TASKS):
+                    title, desc, cmd, weight, est = seed[:5]
+                    table = seed[5] if len(seed) > 5 else ""
                     self.conn.execute(
-                        "INSERT INTO template_tasks (position, title, description, command, weight,"
-                        " estimated_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
-                        (pos, title, desc, cmd, weight, est, ts, ts))
-            # Future migrations: compare int(row["value"]) with SCHEMA_VERSION here.
+                        "INSERT INTO template_tasks (position, title, description, command, table_spec, weight,"
+                        " estimated_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (pos, title, desc, cmd, table, weight, est, ts, ts))
+            else:
+                version = int(row["value"])
+                if version < 2:  # v2: link tables for Word
+                    for table in ("template_tasks", "delivery_tasks"):
+                        cols = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+                        if "table_spec" not in cols:
+                            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN table_spec TEXT NOT NULL DEFAULT ''")
+                self.conn.execute("UPDATE settings SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
 
     def _all(self, sql, args=()):
         return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
@@ -214,8 +207,8 @@ class Database:
         with self._lock, self.conn:
             pos = self.conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM template_tasks").fetchone()[0]
             cur = self.conn.execute(
-                "INSERT INTO template_tasks (position, title, description, command, weight,"
-                " estimated_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO template_tasks (position, title, description, command, table_spec, weight,"
+                " estimated_minutes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 (pos, *_task_fields(data), ts, ts))
             return self._one("SELECT * FROM template_tasks WHERE id=?", (cur.lastrowid,))
 
@@ -226,7 +219,7 @@ class Database:
                 return None
             merged = {**current, **data}
             self.conn.execute(
-                "UPDATE template_tasks SET title=?, description=?, command=?, weight=?,"
+                "UPDATE template_tasks SET title=?, description=?, command=?, table_spec=?, weight=?,"
                 " estimated_minutes=?, updated_at=? WHERE id=?",
                 (*_task_fields(merged), now_iso(), task_id))
             return self._one("SELECT * FROM template_tasks WHERE id=?", (task_id,))
@@ -269,9 +262,9 @@ class Database:
             for t in self._all("SELECT * FROM template_tasks ORDER BY position, id"):
                 self.conn.execute(
                     "INSERT INTO delivery_tasks (delivery_id, template_task_id, position, title, description,"
-                    " command, weight, estimated_minutes) VALUES (?,?,?,?,?,?,?,?)",
+                    " command, table_spec, weight, estimated_minutes) VALUES (?,?,?,?,?,?,?,?,?)",
                     (delivery_id, t["id"], t["position"], t["title"], t["description"], t["command"],
-                     t["weight"], t["estimated_minutes"]))
+                     t["table_spec"], t["weight"], t["estimated_minutes"]))
         return self.get_delivery(delivery_id)
 
     def get_delivery(self, delivery_id):
@@ -322,6 +315,10 @@ class Database:
     def _task(self, task_id):
         return self._one("SELECT * FROM delivery_tasks WHERE id=?", (task_id,))
 
+    def get_delivery_task(self, task_id):
+        with self._lock:
+            return self._task(task_id)
+
     def add_delivery_task(self, delivery_id, data):
         with self._lock, self.conn:
             if not self._one("SELECT id FROM deliveries WHERE id=?", (delivery_id,)):
@@ -333,7 +330,7 @@ class Database:
                                     " WHERE delivery_id=?", (delivery_id,)).fetchone()[0]
             self.conn.execute(
                 "INSERT INTO delivery_tasks (delivery_id, template_task_id, position, title, description,"
-                " command, weight, estimated_minutes) VALUES (?,?,?,?,?,?,?,?)",
+                " command, table_spec, weight, estimated_minutes) VALUES (?,?,?,?,?,?,?,?,?)",
                 (delivery_id, template_id, pos, *_task_fields(data)))
         return self.get_delivery(delivery_id)
 
@@ -344,7 +341,8 @@ class Database:
                 return None
             merged = {**current, **data}
             self.conn.execute(
-                "UPDATE delivery_tasks SET title=?, description=?, command=?, weight=?, estimated_minutes=?"
+                "UPDATE delivery_tasks SET title=?, description=?, command=?, table_spec=?, weight=?,"
+                " estimated_minutes=?"
                 " WHERE id=?", (*_task_fields(merged), task_id))
         return self.get_delivery(current["delivery_id"])
 
@@ -448,6 +446,7 @@ def _task_fields(data):
         title,
         str(data.get("description") or ""),
         str(data.get("command") or ""),
+        str(data.get("table_spec") or ""),
         max(0, int(data.get("weight") or 0)),
         max(0, int(data.get("estimated_minutes") or 0)),
     )

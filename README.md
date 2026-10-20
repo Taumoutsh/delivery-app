@@ -1,26 +1,34 @@
 # Checklist de livraison
 
 Application web locale pour dérouler la checklist d'une livraison : tâches pondérées,
-commandes copiables adaptées à la version, chronos, commentaires, captures, historique
-et rapport PDF/Word.
+commandes copiables adaptées à la version, chronos, commentaires, captures, tableaux de liens
+à coller dans Word, historique et rapport PDF/Word.
+
+**Aucune dépendance** : seul Python 3.8+ est nécessaire (pas de pip, pas d'internet).
 
 ## Lancer
 
 ```sh
-./run.sh          # Linux / macOS
-run.bat           # Windows (double-clic possible)
+python launch.py                  # depuis ce dossier (ou ./run.sh, run.bat)
+python checklist-livraison.pyz    # version fichier unique, voir ci-dessous
 ```
 
-Prérequis : Python 3.9+. Au premier lancement, le script crée `.venv/` et installe les
-dépendances d'export ; ensuite il démarre le serveur sur http://localhost:8765 et ouvre le
-navigateur. La base est stockée dans `data/delivery.db` (à sauvegarder).
+Le serveur démarre sur http://localhost:8765 et ouvre le navigateur. La base est stockée dans
+`data/delivery.db` à côté de l'app (c'est le seul fichier à sauvegarder).
 
-Options : `./run.sh --port 9000 --data /chemin/vers/dossier` (ou `DELIVERY_PORT`, `DELIVERY_DATA`).
+Options : `--port 9000`, `--data /chemin/vers/dossier`, `--no-browser`
+(ou variables `DELIVERY_PORT`, `DELIVERY_DATA`).
 
-Sans script : `python3 -m delivery_app --open` (l'export PDF/Word nécessite `pip install -r requirements.txt`).
+## Fichier unique
+
+```sh
+python tools/build_pyz.py         # → dist/checklist-livraison.pyz (~170 Ko)
+```
+
+Copiez ce seul fichier dans l'environnement cible et lancez-le avec `python`.
 
 ## Développer
 
 - Spécifications et décisions : [SPECS.md](SPECS.md)
-- Tests : `python3 -m unittest discover tests`
-- Démo autonome (sans serveur, données d'exemple) : `python3 tools/build_demo.py` → `demo.html`
+- Tests : `python -m unittest discover tests`
+- Démo autonome (sans serveur, données d'exemple) : `python tools/build_demo.py` → `demo.html`

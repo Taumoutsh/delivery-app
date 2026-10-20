@@ -54,21 +54,24 @@
       return data;
     },
 
-    async exportReport(id, fmt) {
-      const res = await fetch(`/api/deliveries/${id}/report.${fmt}`);
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Erreur ${res.status}`);
-      }
-      const disposition = res.headers.get('Content-Disposition') || '';
-      const match = disposition.match(/filename\*=UTF-8''([^;]+)/);
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(await res.blob());
-      a.download = match ? decodeURIComponent(match[1]) : `livraison.${fmt}`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    },
+    exportReport: (id, fmt) => download(`/api/deliveries/${id}/report.${fmt}`, `livraison.${fmt}`),
+    exportTaskTable: (id) => download(`/api/delivery-tasks/${id}/table.docx`, 'tableau.docx'),
   };
+
+  async function download(url, fallbackName) {
+    const res = await fetch(url);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Erreur ${res.status}`);
+    }
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename\*=UTF-8''([^;]+)/);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(await res.blob());
+    a.download = match ? decodeURIComponent(match[1]) : fallbackName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
 })();

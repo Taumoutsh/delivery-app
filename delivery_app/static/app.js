@@ -79,6 +79,52 @@
     return out + esc((text || '').slice(last));
   }
 
+  const LINK = /\[([^\]]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s|]+)/g;
+
+  // Mirror of templating.parse_table: one row per line, cells split by "|", first line = headers.
+  function parseCell(text) {
+    const segs = [];
+    let last = 0;
+    for (const m of text.matchAll(LINK)) {
+      if (m.index > last) segs.push({ text: text.slice(last, m.index) });
+      segs.push(m[1] ? { text: m[1], url: m[2] } : { text: m[3], url: m[3] });
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) segs.push({ text: text.slice(last) });
+    return segs;
+  }
+
+  function parseTable(spec, vars) {
+    const rows = [];
+    for (let line of renderText(spec, vars).split('\n')) {
+      line = line.trim();
+      if (!line || (/^[\s|:-]+$/.test(line) && line.includes('-'))) continue;
+      if (line.startsWith('|')) line = line.slice(1);
+      if (line.endsWith('|')) line = line.slice(0, -1);
+      rows.push(line.split('|').map((c) => parseCell(c.trim())));
+    }
+    if (!rows.length) return null;
+    const width = Math.max(...rows.map((r) => r.length));
+    rows.forEach((r) => { while (r.length < width) r.push([]); });
+    return { headers: rows[0], rows: rows.slice(1) };
+  }
+
+  const cellHtml = (segs, linkStyle = '') => segs.map((s) => (s.url
+    ? `<a href="${esc(s.url)}" target="_blank" rel="noopener"${linkStyle}>${esc(s.text)}</a>` : esc(s.text))).join('');
+
+  // Self-contained HTML with inline styles: Word keeps borders, shading and hyperlinks on paste.
+  function tableHtmlForWord(table) {
+    const td = 'border:1px solid #C8D1DA;padding:4px 8px;font-family:Calibri,Arial,sans-serif;font-size:10.5pt;vertical-align:top;';
+    const th = `${td}background:#1F5F7A;color:#FFFFFF;font-weight:bold;text-align:left;`;
+    return `<table style="border-collapse:collapse;width:100%;">
+      <thead><tr>${table.headers.map((c) => `<th style="${th}">${cellHtml(c, ' style="color:#FFFFFF;"')}</th>`).join('')}</tr></thead>
+      <tbody>${table.rows.map((r) => `<tr>${r.map((c) => `<td style="${td}">${cellHtml(c, ' style="color:#0563C1;"')}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table>`;
+  }
+
+  const tableText = (table) => [table.headers, ...table.rows]
+    .map((r) => r.map((c) => c.map((s) => (s.url && s.url !== s.text ? `${s.text} (${s.url})` : s.text)).join('')).join('\t')).join('\n');
+
   function missingVars(text, vars) {
     const out = new Set();
     for (const m of (text || '').matchAll(PLACEHOLDER)) if (!vars[m[1]]) out.add(m[1]);
@@ -87,7 +133,7 @@
 
   function placeholdersIn(tasks) {
     const out = new Set();
-    for (const t of tasks) for (const m of `${t.command}\n${t.description}`.matchAll(PLACEHOLDER)) out.add(m[1]);
+    for (const t of tasks) for (const m of `${t.command}\n${t.description}\n${t.table_spec || ''}`.matchAll(PLACEHOLDER)) out.add(m[1]);
     return [...out];
   }
 
@@ -304,6 +350,8 @@
       `<button class="btn ok" data-act="task" data-action="done" data-id="${t.id}">${ICONS.check}Valider</button>`;
 
     const missing = missingVars(t.command, vars);
+    const table = t.table_spec ? parseTable(t.table_spec, vars) : null;
+    const missingTbl = table ? missingVars(t.table_spec, vars) : [];
     const body = !open ? '' : `
       <div class="task-body">
         ${t.description ? `<div class="desc">${renderHtml(t.description, vars).replace(/<span class="var[^"]*"[^>]*>/g, '<b>').replace(/<\/span>/g, '</b>')}</div>` : ''}
@@ -314,6 +362,18 @@
           ${missing.length ? `<div class="warn-vars">Variable non renseignée : ${missing.map((m) => `{{${esc(m)}}}`).join(', ')} —
             <a href="#" data-act="edit-delivery">la définir</a></div>` : ''}
         </div>` : ''}
+        ${table ? `<div>
+          <div class="section-label">Tableau pour Word</div>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr>${table.headers.map((c) => `<th>${cellHtml(c)}</th>`).join('')}</tr></thead>
+            <tbody>${table.rows.map((r) => `<tr>${r.map((c) => `<td>${cellHtml(c)}</td>`).join('')}</tr>`).join('')}</tbody>
+          </table></div>
+          <div class="add-row table-actions">
+            <button class="btn" data-act="copy-table" data-id="${t.id}">Copier pour Word</button>
+            <button class="btn ghost" data-act="table-docx" data-id="${t.id}">Télécharger en .docx</button>
+            ${missingTbl.length ? `<span class="warn-vars">Variable non renseignée : ${missingTbl.map((m) => `{{${esc(m)}}}`).join(', ')}</span>` : ''}
+          </div>
+        </div>` : ''}
         <div>
           <div class="section-label">Captures (${t.images.length})</div>
           <div class="thumbs">
@@ -323,7 +383,7 @@
                 <button class="x" data-act="delete-image" data-id="${img.id}" aria-label="Supprimer l'image">✕</button>
               </div>`).join('')}
             <button class="thumb-add" data-act="add-image" data-id="${t.id}">${ICONS.plus}<span>Ajouter</span></button>
-            <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden data-upload="${t.id}">
+            <input type="file" accept="image/*" multiple hidden data-upload="${t.id}">
           </div>
         </div>
         <div>
@@ -354,6 +414,7 @@
               <span class="badge">Estimé ${est ? fmtDur(est * 60) : '—'}</span>
               ${t.comments.length ? `<span class="badge">${t.comments.length} commentaire${t.comments.length > 1 ? 's' : ''}</span>` : ''}
               ${t.images.length ? `<span class="badge">${t.images.length} capture${t.images.length > 1 ? 's' : ''}</span>` : ''}
+              ${t.table_spec ? '<span class="badge">Tableau Word</span>' : ''}
             </span>
           </div>
           <span class="timer" data-timer="${t.id}" title="Temps passé / estimé"></span>
@@ -384,7 +445,7 @@
         <span class="tpl-idx">${i + 1}</span>
         <div class="tpl-main">
           <strong>${esc(t.title)}</strong>
-          <div class="tpl-cmd">${t.command ? esc(t.command.split('\n')[0]) : '<i>pas de commande</i>'}</div>
+          <div class="tpl-cmd">${t.command ? esc(t.command.split('\n')[0]) : '<i>pas de commande</i>'}${t.table_spec ? ' · <span class="tpl-tag">tableau Word</span>' : ''}</div>
         </div>
         <div class="tpl-nums num"><span>Poids ${t.weight}</span><span>${t.estimated_minutes ? fmtDur(t.estimated_minutes * 60) : '—'}</span></div>
         <div class="tpl-btns">
@@ -500,6 +561,9 @@
       <div class="field"><label for="f-cmd">Ligne(s) de commande</label>
         <textarea id="f-cmd" name="command" class="mono" rows="4" placeholder="git tag -a v{{version}} -m &quot;Release {{version}}&quot;">${esc(t.command)}</textarea>
         <span class="hint">Variables : {{version}}, {{major}}, {{minor}}, {{patch}}, {{prev_version}}, {{date}} et vos variables personnalisées.</span></div>
+      <div class="field"><label for="f-table">Tableau pour Word (optionnel)</label>
+        <textarea id="f-table" name="table_spec" class="mono" rows="4" placeholder="Élément | Lien&#10;Notes de version | [Wiki {{version}}](https://wiki.example.com/releases/{{version}})&#10;Ticket | https://jira.example.com/browse/REL-{{version}}">${esc(t.table_spec)}</textarea>
+        <span class="hint">Une ligne par rangée, cellules séparées par <code>|</code>, la 1re ligne donne les en-têtes. Liens : <code>[texte](https://…)</code> ou URL brute. Variables acceptées.</span></div>
       <div class="row2">
         <div class="field"><label for="f-weight">Poids (progression)</label>
           <input type="number" id="f-weight" name="weight" min="0" step="1" value="${t.weight ?? 1}"></div>
@@ -512,6 +576,7 @@
     title: form.title.value.trim(),
     description: form.description.value,
     command: form.command.value,
+    table_spec: form.table_spec.value,
     weight: Number(form.weight.value) || 0,
     estimated_minutes: Number(form.estimated_minutes.value) || 0,
   });
@@ -591,11 +656,34 @@
 
   // ---------------------------------------------------------------- actions
 
+  // Reports embed PNG/JPEG only: other formats (GIF, WebP, BMP…) are converted to PNG in the browser.
+  async function toPngOrJpeg(file) {
+    if (file.type === 'image/png' || file.type === 'image/jpeg') return file;
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((resolve, reject) => {
+        const i = new Image();
+        i.onload = () => resolve(i);
+        i.onerror = () => reject(new Error(`Image illisible : ${file.name}`));
+        i.src = url;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      const name = (file.name || 'capture').replace(/\.[^.]+$/, '') + '.png';
+      return new File([blob], name, { type: 'image/png' });
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
   async function uploadFiles(taskId, files) {
     const images = [...files].filter((f) => f.type.startsWith('image/'));
     if (!images.length) return;
     let d;
-    for (const f of images) d = await run(API.uploadImage(taskId, f));
+    for (const f of images) d = await run(toPngOrJpeg(f).then((png) => API.uploadImage(taskId, png)));
     await setDelivery(d);
     toast(images.length > 1 ? `${images.length} images ajoutées` : 'Image ajoutée');
   }
@@ -616,6 +704,36 @@
     btn.textContent = 'Copié ✓';
     btn.classList.add('copied');
     setTimeout(() => { btn.textContent = 'Copier'; btn.classList.remove('copied'); }, 1500);
+  }
+
+  async function copyTable(btn, taskId) {
+    const t = state.delivery.tasks.find((x) => x.id === taskId);
+    const table = parseTable(t.table_spec, buildVariables(state.delivery));
+    const html = tableHtmlForWord(table);
+    let ok = false;
+    try {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/html': new Blob([html], { type: 'text/html' }),
+        'text/plain': new Blob([tableText(table)], { type: 'text/plain' }),
+      })]);
+      ok = true;
+    } catch {
+      // Fallback: select a rendered copy so the browser puts rich HTML on the clipboard.
+      const holder = document.createElement('div');
+      holder.style.cssText = 'position:fixed;left:-10000px;top:0;background:#fff;color:#000;';
+      holder.innerHTML = html;
+      document.body.appendChild(holder);
+      const range = document.createRange();
+      range.selectNodeContents(holder);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      try { ok = document.execCommand('copy'); } catch { ok = false; }
+      getSelection().removeAllRanges();
+      holder.remove();
+    }
+    if (!ok) { toast('Copie refusée par le navigateur : utilisez « Télécharger en .docx ».', true); return; }
+    btn.textContent = 'Copié ✓ — collez dans Word';
+    setTimeout(() => { btn.textContent = 'Copier pour Word'; }, 2200);
   }
 
   async function postComment(taskId) {
@@ -651,6 +769,8 @@
       await setDelivery(d);
     },
     copy: (el) => copyCommand(el, Number(el.dataset.id)),
+    'copy-table': (el) => copyTable(el, Number(el.dataset.id)),
+    'table-docx': (el) => run(API.exportTaskTable(Number(el.dataset.id))),
     comment: (el) => postComment(Number(el.dataset.id)),
     async 'delete-comment'(el) {
       if (!(await confirmBox('Supprimer ce commentaire ?'))) return;

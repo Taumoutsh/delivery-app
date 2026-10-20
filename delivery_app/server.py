@@ -2,19 +2,19 @@
 
 import json
 import mimetypes
+import pkgutil
 import re
 import sys
 import traceback
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 
 from . import report
 
-STATIC_DIR = Path(__file__).parent / "static"
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_UPLOAD = 15 * 1024 * 1024
-IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+IMAGE_TYPES = {"image/png", "image/jpeg"}  # the UI converts GIF/WebP to PNG before upload
 
 ROUTES = []
 
@@ -118,14 +118,19 @@ def reorder_delivery_tasks(h, delivery_id):
 @route("GET", r"/api/deliveries/(\d+)/report\.(pdf|docx)")
 def export_report(h, delivery_id, fmt):
     delivery = found(h.db.get_delivery(int(delivery_id)))
-    try:
-        data = report.build_pdf(delivery, h.db) if fmt == "pdf" else report.build_docx(delivery, h.db)
-    except report.ExportUnavailable as exc:
-        raise HttpError(HTTPStatus.NOT_IMPLEMENTED, str(exc))
-    mime = "application/pdf" if fmt == "pdf" else \
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    data = report.build_pdf(delivery, h.db) if fmt == "pdf" else report.build_docx(delivery, h.db)
+    mime = "application/pdf" if fmt == "pdf" else DOCX_MIME
     safe = re.sub(r"[^\w.-]+", "_", delivery["version"])
     h.send_bytes(data, mime, f"livraison_{safe}.{fmt}", attachment=True)
+
+
+@route("GET", r"/api/delivery-tasks/(\d+)/table\.docx")
+def export_task_table(h, task_id):
+    task = found(h.db.get_delivery_task(int(task_id)))
+    delivery = found(h.db.get_delivery(task["delivery_id"]))
+    data = report.build_table_docx(task, delivery)
+    safe = re.sub(r"[^\w.-]+", "_", f"tableau_{task['title'][:40]}_{delivery['version']}")
+    h.send_bytes(data, DOCX_MIME, f"{safe}.docx", attachment=True)
 
 
 @route("PUT", r"/api/delivery-tasks/(\d+)")
@@ -157,7 +162,7 @@ def delete_comment(h, comment_id):
 def upload_image(h, task_id):
     mime = (h.headers.get("Content-Type") or "").split(";")[0].strip().lower()
     if mime not in IMAGE_TYPES:
-        raise HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Formats acceptés : PNG, JPEG, GIF, WebP.")
+        raise HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Formats acceptés : PNG, JPEG.")
     filename = unquote(h.headers.get("X-Filename") or "image")[:200]
     return found(h.db.add_image(int(task_id), filename, mime, h.body()))
 
@@ -239,14 +244,20 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": "Erreur interne du serveur."}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def serve_static(self, path):
-        rel = "index.html" if path in ("", "/") else path.lstrip("/")
-        target = (STATIC_DIR / rel).resolve()
-        if STATIC_DIR.resolve() not in target.parents or not target.is_file():
+        # pkgutil reads from the package directory or from inside a .pyz archive alike.
+        rel = "index.html" if path in ("", "/") else unquote(path).lstrip("/")
+        if any(part in ("", ".", "..") for part in rel.split("/")) or "\\" in rel:
             raise HttpError(HTTPStatus.NOT_FOUND, "Fichier introuvable.")
-        mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        try:
+            data = pkgutil.get_data("delivery_app", f"static/{rel}")
+        except (OSError, ValueError):
+            data = None
+        if data is None:
+            raise HttpError(HTTPStatus.NOT_FOUND, "Fichier introuvable.")
+        mime = mimetypes.guess_type(rel)[0] or ("font/woff2" if rel.endswith(".woff2") else "application/octet-stream")
         if mime.startswith("text/") or mime.endswith("javascript"):
             mime += "; charset=utf-8"
-        self.send_bytes(target.read_bytes(), mime)
+        self.send_bytes(data, mime)
 
     def do_GET(self):
         self.dispatch("GET")

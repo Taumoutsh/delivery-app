@@ -1,4 +1,7 @@
-"""Entry point: python -m delivery_app [--port 8765] [--data DIR] [--open]"""
+"""Entry point: python -m delivery_app [--port 8765] [--data DIR] [--open]
+
+Also used by launch.py and by the single-file checklist-livraison.pyz build.
+"""
 
 import argparse
 import os
@@ -9,7 +12,21 @@ from pathlib import Path
 from .db import Database
 from .server import make_server
 
-DEFAULT_DATA = Path(__file__).resolve().parent.parent / "data"
+
+def app_home():
+    """Folder holding the app: the repository root, or the folder containing the .pyz file."""
+    home = Path(__file__).resolve().parent.parent
+    return home.parent if home.is_file() else home
+
+
+DEFAULT_DATA = app_home() / "data"
+
+
+def open_browser(url):
+    try:
+        webbrowser.open(url)
+    except Exception:
+        print(f"Ouvrez {url} dans votre navigateur.")
 
 
 def main():
@@ -24,13 +41,16 @@ def main():
     data_dir = Path(args.data).expanduser().resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
     db = Database(data_dir / "delivery.db")
-    server = make_server(db, args.host, args.port)
+    try:
+        server = make_server(db, args.host, args.port)
+    except OSError as exc:
+        raise SystemExit(f"Impossible d'écouter sur le port {args.port} ({exc}). Essayez --port 8766.")
     url = f"http://{'localhost' if args.host in ('127.0.0.1', '0.0.0.0') else args.host}:{args.port}/"
     print(f"Checklist de livraison : {url}")
     print(f"Base de données        : {data_dir / 'delivery.db'}")
-    print("Ctrl+C pour arrêter.")
+    print("Ctrl+C pour arrêter.", flush=True)
     if args.open:
-        threading.Timer(0.6, webbrowser.open, (url,)).start()
+        threading.Timer(0.6, open_browser, (url,)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

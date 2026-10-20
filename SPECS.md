@@ -21,6 +21,8 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E10 | Export d'un rapport de fin : PDF et Word | ✅ |
 | E11 | Toutes les livraisons historisées et accessibles en base | ✅ |
 | E12 | Une ou plusieurs images par tâche (miniature, agrandie à la demande) | ✅ |
+| E13 | Pour certaines tâches, générer un tableau avec liens à insérer dans un document Word | ✅ copie riche + .docx |
+| E14 | Tout embarquer : l'environnement cible n'exécute qu'un Python (pas de pip, pas d'internet) | ✅ stdlib uniquement |
 
 ## 2. Concepts
 
@@ -48,7 +50,30 @@ et dans le rapport. Une variable inconnue reste telle quelle et est signalée (s
 
 Les variables personnalisées surchargent les variables intégrées.
 
-### 2.2 Statuts et chrono
+### 2.2 Tableau pour Word (E13)
+
+Champ optionnel `table_spec` d'une tâche (modèle et livraison). Syntaxe, une rangée par ligne :
+
+```
+Élément | Lien
+Notes de version {{version}} | [Wiki — release {{version}}](https://wiki.example.com/releases/{{version}})
+Tag Git | https://git.example.com/app/-/tags/v{{version}}
+```
+
+- Cellules séparées par `|` ; la 1re ligne donne les en-têtes ; `|` en début/fin et lignes `|---|` (style
+  Markdown) ignorés ; rangées courtes complétées par des cellules vides.
+- Liens : `[texte](url)` ou URL brute `http(s)://…` ; texte et liens peuvent se mélanger dans une cellule.
+- Variables `{{…}}` substituées comme pour les commandes. Un `|` ne peut pas figurer dans une URL.
+- Dans la tâche : aperçu du tableau, puis
+  - **Copier pour Word** : presse-papiers HTML (styles en ligne : bordures, en-tête coloré, liens
+    cliquables) + texte tabulé ; on colle directement dans Word. Repli `execCommand('copy')` si l'API
+    Clipboard est refusée.
+  - **Télécharger en .docx** : document contenant uniquement le tableau (Word : Insertion › Objet ›
+    Texte d'un fichier, ou copier-coller).
+- Le tableau figure aussi dans les rapports PDF (liens cliquables) et Word (hyperliens).
+- Parseur en double : `templating.parse_table` (Python) et `parseTable` (`app.js`) — les garder alignés.
+
+### 2.3 Statuts et chrono
 
 `todo` → `running` ⇄ `paused` → `done` | `skipped` (non applicable).
 
@@ -60,7 +85,7 @@ Les variables personnalisées surchargent les variables intégrées.
 - Plusieurs tâches peuvent tourner en parallèle. Le temps est calculé côté serveur (UTC),
   l'interface rafraîchit l'affichage chaque seconde. Dépassement de l'estimé affiché en orange.
 
-### 2.3 Progression
+### 2.4 Progression
 
 `progression = Σ poids(validées) / Σ poids(toutes sauf non applicables)`.
 La barre est segmentée : un segment par tâche, largeur proportionnelle au poids, couleur selon
@@ -70,41 +95,57 @@ le statut. Affiche aussi tâches faites, poids, temps passé, estimé, reste est
 
 ```
 run.sh / run.bat          lanceurs (venv + dépendances + ouverture navigateur)
-requirements.txt          dépendances d'export uniquement (python-docx, reportlab, pillow)
+launch.py                 lanceur Python (ouvre le navigateur ; --no-browser pour l'éviter)
 delivery_app/
   __main__.py             CLI : --port (8765) --host (127.0.0.1) --data (./data) --open
   server.py               serveur HTTP (bibliothèque standard) : API JSON + fichiers statiques
   db.py                   SQLite : schéma, migrations, logique métier (statuts, progression)
-  report.py               génération des rapports PDF et Word
-  static/                 frontend vanilla JS (index.html, style.css, api.js, app.js)
+  templating.py           variables {{…}} et analyse des tableaux de liens
+  report.py               contenu des rapports PDF/Word et du tableau .docx
+  docx_writer.py          écriture .docx en XML brut (paragraphes, tableaux, hyperliens, images)
+  pdf_writer.py           écriture PDF (polices standard, mise en page, tableaux, liens, PNG/JPEG)
+  static/                 frontend vanilla JS (index.html, style.css, api.js, app.js, fonts/)
 data/delivery.db          base SQLite (créée au premier lancement, images incluses en BLOB)
+tools/build_pyz.py        produit dist/checklist-livraison.pyz : toute l'app en un seul fichier
 tools/build_demo.py       génère demo.html autonome (mock-api.js à la place d'api.js)
 tests/test_app.py         tests d'API bout en bout (python -m unittest discover tests)
 ```
 
 Choix :
-- **Aucune dépendance pour le serveur** (stdlib `http.server` + `sqlite3`) : l'app démarre même
-  hors-ligne ; seul l'export PDF/Word requiert les paquets de `requirements.txt` (sinon HTTP 501
-  avec message explicite).
+- **Zéro dépendance (E14)** : uniquement la bibliothèque standard de Python ≥ 3.8 (`http.server`,
+  `sqlite3`, `zipfile`, `zlib`). Pas de pip, pas de venv, pas d'accès réseau, polices embarquées.
+  Ne jamais ajouter de paquet tiers : l'environnement cible ne peut pas les installer.
+- **Distribution** : soit le dossier (`python launch.py`), soit un fichier unique
+  `checklist-livraison.pyz` (`python checklist-livraison.pyz`) ; les données vont dans `data/` à côté.
+  Les fichiers statiques sont lus via `pkgutil.get_data`, ce qui marche dans les deux cas.
+- **Word** : `.docx` écrit à la main (zip + WordprocessingML) : titres, tableaux à bordures, en-têtes
+  répétés, hyperliens externes, images PNG/JPEG/GIF en ligne.
+- **PDF** : écrit à la main (PDF 1.4) avec les polices standard Helvetica/Courier (encodage WinAnsi :
+  les caractères hors cp1252 deviennent `?`), césure par métriques AFM, tableaux avec en-têtes
+  répétés, liens cliquables, pied de page « page n/N ». Images : JPEG intégré tel quel ; PNG sans
+  transparence transmis tel quel (prédicteur PNG du PDF) ; PNG avec transparence décodé en Python
+  (≈ 1 à 4 s pour une capture Full HD, résultat mis en cache en mémoire).
 - **Images en BLOB dans SQLite** : un seul fichier à sauvegarder (`data/delivery.db`).
-  Limite 15 Mo par image ; PNG, JPEG, GIF, WebP.
+  Limite 15 Mo par image ; le serveur n'accepte que PNG et JPEG, le navigateur convertit les
+  autres formats (GIF, WebP, BMP…) en PNG avant l'envoi.
 - **Écoute sur 127.0.0.1** par défaut (usage local, pas d'authentification).
 - Variables d'environnement : `DELIVERY_PORT`, `DELIVERY_HOST`, `DELIVERY_DATA`.
-- Polices IBM Plex chargées depuis Google Fonts avec repli système (fonctionne hors-ligne).
+- Polices IBM Plex (licence OFL) embarquées dans `static/fonts/` (sous-ensemble latin, ~150 Ko).
 
-### 3.1 Schéma (version 1)
+### 3.1 Schéma (version 2)
 
 - `settings(key, value)` — `schema_version`, `default_variables` (JSON).
-- `template_tasks(id, position, title, description, command, weight, estimated_minutes, created_at, updated_at)`
+- `template_tasks(id, position, title, description, command, table_spec, weight, estimated_minutes, created_at, updated_at)`
 - `deliveries(id, version, name, variables JSON, status, created_at, completed_at)`
 - `delivery_tasks(id, delivery_id→deliveries, template_task_id→template_tasks, position, title,
-  description, command, weight, estimated_minutes, status, elapsed_seconds, running_since,
+  description, command, table_spec, weight, estimated_minutes, status, elapsed_seconds, running_since,
   started_at, completed_at)`
 - `comments(id, delivery_task_id, body, created_at)`
 - `images(id, delivery_task_id, filename, mime, size, data BLOB, created_at)`
 
 Horodatages en UTC ISO-8601 (`2026-10-20T15:47:40Z`). Suppressions en cascade.
 Migrations : incrémenter `SCHEMA_VERSION` dans `db.py` et ajouter l'étape dans `_migrate()`.
+v1 → v2 : ajout de `table_spec` aux deux tables de tâches (`ALTER TABLE`).
 
 ### 3.2 API
 
@@ -120,9 +161,10 @@ Migrations : incrémenter `SCHEMA_VERSION` dans `db.py` et ajouter l'étape dans
 | POST | `/api/deliveries/{id}/reorder` | réordonner |
 | GET | `/api/deliveries/{id}/report.pdf` · `.docx` | rapport |
 | PUT/DELETE | `/api/delivery-tasks/{id}` | modifier / retirer |
+| GET | `/api/delivery-tasks/{id}/table.docx` | tableau de liens seul, en .docx |
 | POST | `/api/delivery-tasks/{id}/action` | `{action: start|pause|done|skip|reopen|reset}` |
 | POST | `/api/delivery-tasks/{id}/comments` | `{body}` |
-| POST | `/api/delivery-tasks/{id}/images` | corps brut, `Content-Type` image, en-tête `X-Filename` |
+| POST | `/api/delivery-tasks/{id}/images` | corps brut, `Content-Type` PNG/JPEG, en-tête `X-Filename` |
 | GET/DELETE | `/api/images/{id}` | image / suppression |
 | DELETE | `/api/comments/{id}` | suppression |
 
@@ -135,7 +177,8 @@ Les mutations d'une livraison renvoient la livraison complète (l'UI se re-rend 
   carte de progression, liste des tâches, ajout de tâche.
 - Carte de tâche : bouton rond de validation, titre, statut, poids, estimé, chrono, Démarrer/Pause,
   Valider, menu (modifier, non applicable, monter/descendre, remise à zéro, retirer), replier/déplier.
-  Corps : description, bloc de commande avec bouton Copier, captures (miniatures → visionneuse
+  Corps : description, bloc de commande avec bouton Copier, tableau pour Word (Copier pour Word,
+  Télécharger en .docx), captures (miniatures → visionneuse
   avec flèches/Échap), commentaires (Ctrl+Entrée pour publier, Ctrl+V pour coller une capture).
 - Tâches validées repliées par défaut (dépliables) ; tâches ouvertes dépliées (repliables).
 - Vue modèle : liste ordonnable, ajout/modification/suppression, aide sur les variables,
@@ -146,7 +189,7 @@ Les mutations d'une livraison renvoient la livraison complète (l'UI se re-rend 
 
 Titre, statut, dates, progression, compteurs, temps passé/estimé, variables ; tableau de synthèse
 (tâche, statut, estimé, passé) ; détail par tâche : méta (statut, poids, temps, dates),
-description et commandes **résolues**, commentaires horodatés, images.
+description et commandes **résolues**, tableau de liens, commentaires horodatés, images.
 
 ## 6. Pistes d'évolution
 
@@ -161,3 +204,6 @@ description et commandes **résolues**, commentaires horodatés, images.
 
 - **v1.0 (2026-10-20)** — Première version : modèle, livraisons historisées, variables, chronos,
   progression pondérée, commentaires, images, export PDF/Word, lanceurs, tests, démo autonome.
+- **v1.1 (2026-10-20)** — Tableaux de liens pour Word par tâche (E13). Suppression de toutes les
+  dépendances (E14) : générateurs PDF et .docx maison, polices embarquées, `launch.py`, archive
+  `.pyz` unique, migration de schéma v2. Les GIF/WebP sont convertis en PNG par le navigateur.

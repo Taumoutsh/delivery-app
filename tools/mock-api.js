@@ -29,13 +29,15 @@
     ['Construire les artefacts', "Build de l'image Docker pour la version {{version}}.", 'docker build -t {{registry}}/app:{{version}} .\ndocker push {{registry}}/app:{{version}}', 3, 20],
     ['Tagger la version', 'Tag annoté, comparé à la version précédente {{prev_version}}.', 'git tag -a v{{version}} -m "Release {{version}}"\ngit push origin v{{version}}\ngit log --oneline v{{prev_version}}..v{{version}}', 1, 5],
     ['Déployer en recette', 'Vérifier les logs après déploiement.', './deploy.sh --env {{env}} --version {{version}}', 3, 25],
-    ['Rédiger les notes de version', "Résumé des changements depuis {{prev_version}}, à envoyer à l'équipe.", '', 2, 20],
-  ].map(([title, description, command, weight, estimated_minutes], i) => ({
-    id: i + 1, position: i, title, description, command, weight, estimated_minutes,
+    ['Rédiger les notes de version', "Résumé des changements depuis {{prev_version}}, à envoyer à l'équipe. Le tableau ci-dessous se colle directement dans le document de livraison.", '', 2, 20,
+      'Élément | Lien\nNotes de version {{version}} | [Wiki — release {{version}}](https://wiki.example.com/releases/{{version}})\nTag Git | [v{{version}}](https://git.example.com/app/-/tags/v{{version}})\nImage Docker | [{{registry}}/app:{{version}}](https://{{registry}}/harbor/projects/app/tags/{{version}})\nComparaison | [v{{prev_version}}...v{{version}}](https://git.example.com/app/-/compare/v{{prev_version}}...v{{version}})'],
+  ].map(([title, description, command, weight, estimated_minutes, table_spec = ''], i) => ({
+    id: i + 1, position: i, title, description, command, table_spec, weight, estimated_minutes,
   }));
 
   const fromTemplate = (t, extra) => ({
     id: nextId(), template_task_id: t.id, title: t.title, description: t.description, command: t.command,
+    table_spec: t.table_spec || '',
     weight: t.weight, estimated_minutes: t.estimated_minutes, status: 'todo', elapsed_seconds: 0,
     running_since: null, started_at: null, completed_at: null, comments: [], images: [], ...extra,
   });
@@ -99,6 +101,7 @@
     if (!String(data.title || '').trim()) throw new Error('Le titre est obligatoire.');
     return {
       title: data.title.trim(), description: data.description || '', command: data.command || '',
+      table_spec: data.table_spec || '',
       weight: Math.max(0, Number(data.weight) || 0), estimated_minutes: Math.max(0, Number(data.estimated_minutes) || 0),
     };
   };
@@ -192,6 +195,8 @@
       reader.onerror = () => reject(new Error("Lecture de l'image impossible."));
       reader.readAsDataURL(file);
     }),
+    exportTaskTable: () => Promise.reject(new Error(
+      "Démo : le .docx est généré par le serveur Python de l'app locale. « Copier pour Word » fonctionne ici.")),
     exportReport: (id, fmt) => Promise.reject(new Error(
       `Démo : l'export ${fmt === 'pdf' ? 'PDF' : 'Word'} est généré par le serveur Python de l'app locale.`)),
   };
