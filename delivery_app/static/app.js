@@ -131,9 +131,13 @@
     return [...out];
   }
 
+  // Every text of a task that may hold {{variables}}.
+  const taskText = (t) => [t.description, ...t.commands.flatMap((c) => [c.label, c.text]),
+    ...t.link_tables.flatMap((tb) => [tb.title, tb.spec])].join('\n');
+
   function placeholdersIn(tasks) {
     const out = new Set();
-    for (const t of tasks) for (const m of `${t.command}\n${t.description}\n${t.table_spec || ''}`.matchAll(PLACEHOLDER)) out.add(m[1]);
+    for (const t of tasks) for (const m of taskText(t).matchAll(PLACEHOLDER)) out.add(m[1]);
     return [...out];
   }
 
@@ -349,30 +353,42 @@
     const validate = finished(t) ? '' :
       `<button class="btn ok" data-act="task" data-action="done" data-id="${t.id}">${ICONS.check}Valider</button>`;
 
-    const missing = missingVars(t.command, vars);
-    const table = t.table_spec ? parseTable(t.table_spec, vars) : null;
-    const missingTbl = table ? missingVars(t.table_spec, vars) : [];
+    const missing = missingVars(t.commands.map((c) => `${c.label}\n${c.text}`).join('\n'), vars);
+    const tables = t.link_tables.map((tb) => ({ title: renderText(tb.title, vars), table: parseTable(tb.spec, vars) }))
+      .filter((tb) => tb.table);
+    const missingTbl = missingVars(t.link_tables.map((tb) => `${tb.title}\n${tb.spec}`).join('\n'), vars);
+    const warn = (names, fix) => (names.length ? `<div class="warn-vars">Variable non renseignée : ${names.map((m) => `{{${esc(m)}}}`).join(', ')}${fix
+      ? ' — <a href="#" data-act="edit-delivery">la définir</a>' : ''}</div>` : '');
     const body = !open ? '' : `
       <div class="task-body">
         ${t.description ? `<div class="desc">${renderHtml(t.description, vars).replace(/<span class="var[^"]*"[^>]*>/g, '<b>').replace(/<\/span>/g, '</b>')}</div>` : ''}
-        ${t.command ? `<div>
-          <div class="section-label">Ligne de commande</div>
-          <div class="cmd"><pre>${renderHtml(t.command, vars)}</pre>
-            <button class="copy" data-act="copy" data-id="${t.id}">Copier</button></div>
-          ${missing.length ? `<div class="warn-vars">Variable non renseignée : ${missing.map((m) => `{{${esc(m)}}}`).join(', ')} —
-            <a href="#" data-act="edit-delivery">la définir</a></div>` : ''}
+        ${t.commands.length ? `<div class="stack">
+          <div class="section-label">${t.commands.length > 1 ? `Lignes de commande (${t.commands.length})` : 'Ligne de commande'}</div>
+          ${t.commands.map((c, i) => `<div class="cmd-block">
+            ${c.label ? `<div class="cmd-label">${renderHtml(c.label, vars)}</div>` : ''}
+            <div class="cmd"><pre>${renderHtml(c.text, vars)}</pre>
+              <button class="copy" data-act="copy" data-id="${t.id}" data-idx="${i}">Copier</button></div>
+          </div>`).join('')}
+          ${warn(missing, true)}
         </div>` : ''}
-        ${table ? `<div>
-          <div class="section-label">Tableau pour Word</div>
-          <div class="doc-table-wrap"><table class="doc-table">
-            <thead><tr>${table.headers.map((c) => `<th>${cellHtml(c)}</th>`).join('')}</tr></thead>
-            <tbody>${table.rows.map((r) => `<tr>${r.map((c) => `<td>${cellHtml(c)}</td>`).join('')}</tr>`).join('')}</tbody>
-          </table></div>
-          <div class="add-row table-actions">
-            <button class="btn" data-act="copy-table" data-id="${t.id}">Copier pour Word</button>
-            <button class="btn ghost" data-act="table-docx" data-id="${t.id}">Télécharger en .docx</button>
-            ${missingTbl.length ? `<span class="warn-vars">Variable non renseignée : ${missingTbl.map((m) => `{{${esc(m)}}}`).join(', ')}</span>` : ''}
-          </div>
+        ${tables.length ? `<div class="stack">
+          <div class="section-label">${tables.length > 1 ? `Tableaux pour Word (${tables.length})` : 'Tableau pour Word'}</div>
+          ${tables.map(({ title, table }, i) => `<div class="table-block">
+            ${title ? `<div class="table-title">${esc(title)}</div>` : ''}
+            <div class="doc-table-wrap"><table class="doc-table">
+              <thead><tr>${table.headers.map((c) => `<th>${cellHtml(c)}</th>`).join('')}</tr></thead>
+              <tbody>${table.rows.map((r) => `<tr>${r.map((c) => `<td>${cellHtml(c)}</td>`).join('')}</tr>`).join('')}</tbody>
+            </table></div>
+            <div class="add-row table-actions">
+              <button class="btn" data-act="copy-table" data-id="${t.id}" data-idx="${i}">Copier pour Word</button>
+              <button class="btn ghost" data-act="table-docx" data-id="${t.id}" data-idx="${i}">Télécharger en .docx</button>
+            </div>
+          </div>`).join('')}
+          ${tables.length > 1 ? `<div class="add-row table-actions all">
+            <button class="btn" data-act="copy-table" data-id="${t.id}">Copier tous les tableaux</button>
+            <button class="btn ghost" data-act="table-docx" data-id="${t.id}">Tous en .docx</button>
+          </div>` : ''}
+          ${warn(missingTbl, true)}
         </div>` : ''}
         <div>
           <div class="section-label">Captures (${t.images.length})</div>
@@ -414,7 +430,7 @@
               <span class="badge">Estimé ${est ? fmtDur(est * 60) : '—'}</span>
               ${t.comments.length ? `<span class="badge">${t.comments.length} commentaire${t.comments.length > 1 ? 's' : ''}</span>` : ''}
               ${t.images.length ? `<span class="badge">${t.images.length} capture${t.images.length > 1 ? 's' : ''}</span>` : ''}
-              ${t.table_spec ? '<span class="badge">Tableau Word</span>' : ''}
+              ${t.link_tables.length ? `<span class="badge">${t.link_tables.length > 1 ? `${t.link_tables.length} tableaux Word` : 'Tableau Word'}</span>` : ''}
             </span>
           </div>
           <span class="timer" data-timer="${t.id}" title="Temps passé / estimé"></span>
@@ -445,7 +461,7 @@
         <span class="tpl-idx">${i + 1}</span>
         <div class="tpl-main">
           <strong>${esc(t.title)}</strong>
-          <div class="tpl-cmd">${t.command ? esc(t.command.split('\n')[0]) : '<i>pas de commande</i>'}${t.table_spec ? ' · <span class="tpl-tag">tableau Word</span>' : ''}</div>
+          <div class="tpl-cmd">${t.commands.length ? esc(t.commands[0].text.split('\n')[0]) : '<i>pas de commande</i>'}${t.commands.length > 1 ? ` <span class="tpl-tag">+${t.commands.length - 1} commande${t.commands.length > 2 ? 's' : ''}</span>` : ''}${t.link_tables.length ? ` · <span class="tpl-tag">${t.link_tables.length} tableau${t.link_tables.length > 1 ? 'x' : ''} Word</span>` : ''}</div>
         </div>
         <div class="tpl-nums num"><span>Poids ${t.weight}</span><span>${t.estimated_minutes ? fmtDur(t.estimated_minutes * 60) : '—'}</span></div>
         <div class="tpl-btns">
@@ -522,6 +538,7 @@
     overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
     overlay.querySelector('[data-close]').onclick = close;
     if (onInput) form.addEventListener('input', () => onInput(form));
+    if (form.querySelector('[data-list]')) repEditor(form);
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const errEl = form.querySelector('.error');
@@ -558,11 +575,13 @@
         <input type="text" id="f-title" name="title" required value="${esc(t.title)}"></div>
       <div class="field"><label for="f-desc">Description</label>
         <textarea id="f-desc" name="description" rows="3">${esc(t.description)}</textarea></div>
-      <div class="field"><label for="f-cmd">Ligne(s) de commande</label>
-        <textarea id="f-cmd" name="command" class="mono" rows="4" placeholder="git tag -a v{{version}} -m &quot;Release {{version}}&quot;">${esc(t.command)}</textarea>
-        <span class="hint">Variables : {{version}}, {{major}}, {{minor}}, {{patch}}, {{prev_version}}, {{date}} et vos variables personnalisées.</span></div>
-      <div class="field"><label for="f-table">Tableau pour Word (optionnel)</label>
-        <textarea id="f-table" name="table_spec" class="mono" rows="4" placeholder="Élément | Lien&#10;Notes de version | [Wiki {{version}}](https://wiki.example.com/releases/{{version}})&#10;Ticket | https://jira.example.com/browse/REL-{{version}}">${esc(t.table_spec)}</textarea>
+      <div class="field"><label>Lignes de commande</label>
+        <div class="rep-list" data-list="commands">${(t.commands?.length ? t.commands : [{}]).map((c) => repRow('commands', c)).join('')}</div>
+        <div><button type="button" class="btn ghost" data-rep-add="commands">${ICONS.plus}Ajouter une commande</button></div>
+        <span class="hint">Chaque bloc a son bouton Copier. Variables : {{version}}, {{major}}, {{minor}}, {{patch}}, {{prev_version}}, {{date}} et vos variables personnalisées.</span></div>
+      <div class="field"><label>Tableaux pour Word (optionnels)</label>
+        <div class="rep-list" data-list="link_tables">${(t.link_tables || []).map((tb) => repRow('link_tables', tb)).join('')}</div>
+        <div><button type="button" class="btn ghost" data-rep-add="link_tables">${ICONS.plus}Ajouter un tableau Word</button></div>
         <span class="hint">Une ligne par rangée, cellules séparées par <code>|</code>, la 1re ligne donne les en-têtes. Liens : <code>[texte](https://…)</code> ou URL brute. Variables acceptées.</span></div>
       <div class="row2">
         <div class="field"><label for="f-weight">Poids (progression)</label>
@@ -572,11 +591,51 @@
       </div>${extra}`;
   }
 
+  // One editable entry of a repeated list (a command block or a Word table) in the task form.
+  function repRow(kind, item = {}) {
+    const isCmd = kind === 'commands';
+    return `<div class="rep-item" data-item>
+      <div class="rep-head">
+        <input type="text" data-k="${isCmd ? 'label' : 'title'}" value="${esc(isCmd ? item.label : item.title)}"
+               placeholder="${isCmd ? 'Libellé (optionnel) : Linux, Build, Rollback…' : 'Titre du tableau (optionnel) : Liens, Livrables…'}"
+               aria-label="${isCmd ? 'Libellé de la commande' : 'Titre du tableau'}">
+        <button type="button" class="btn icon ghost" data-rep-move="-1" aria-label="Monter">${ICONS.up}</button>
+        <button type="button" class="btn icon ghost" data-rep-move="1" aria-label="Descendre">${ICONS.down}</button>
+        <button type="button" class="btn ghost danger" data-rep-remove>Retirer</button>
+      </div>
+      <textarea data-k="${isCmd ? 'text' : 'spec'}" class="mono" rows="${isCmd ? 3 : 4}" aria-label="${isCmd ? 'Commande' : 'Contenu du tableau'}"
+        placeholder="${isCmd ? 'git tag -a v{{version}} -m &quot;Release {{version}}&quot;'
+          : 'Élément | Lien&#10;Notes de version | [Wiki {{version}}](https://wiki.example.com/releases/{{version}})&#10;Ticket | https://jira.example.com/browse/REL-{{version}}'}">${esc(isCmd ? item.text : item.spec)}</textarea>
+    </div>`;
+  }
+
+  function repEditor(form) {
+    form.addEventListener('click', (e) => {
+      const add = e.target.closest('[data-rep-add]');
+      const item = e.target.closest('[data-item]');
+      if (add) {
+        const list = form.querySelector(`[data-list="${add.dataset.repAdd}"]`);
+        list.insertAdjacentHTML('beforeend', repRow(add.dataset.repAdd));
+        list.lastElementChild.querySelector('textarea').focus();
+      } else if (item && e.target.closest('[data-rep-remove]')) {
+        item.remove();
+      } else if (item && e.target.closest('[data-rep-move]')) {
+        const dir = Number(e.target.closest('[data-rep-move]').dataset.repMove);
+        const other = dir < 0 ? item.previousElementSibling : item.nextElementSibling;
+        if (other) (dir < 0 ? other.before(item) : other.after(item));
+      }
+    });
+  }
+
+  const listData = (form, kind, [k1, k2]) => [...form.querySelectorAll(`[data-list="${kind}"] [data-item]`)]
+    .map((row) => ({ [k1]: row.querySelector(`[data-k="${k1}"]`).value.trim(), [k2]: row.querySelector(`[data-k="${k2}"]`).value }))
+    .filter((x) => x[k2].trim());
+
   const taskFormData = (form) => ({
     title: form.title.value.trim(),
     description: form.description.value,
-    command: form.command.value,
-    table_spec: form.table_spec.value,
+    commands: listData(form, 'commands', ['label', 'text']),
+    link_tables: listData(form, 'link_tables', ['title', 'spec']),
     weight: Number(form.weight.value) || 0,
     estimated_minutes: Number(form.estimated_minutes.value) || 0,
   });
@@ -688,9 +747,9 @@
     toast(images.length > 1 ? `${images.length} images ajoutées` : 'Image ajoutée');
   }
 
-  async function copyCommand(btn, taskId) {
+  async function copyCommand(btn, taskId, idx) {
     const t = state.delivery.tasks.find((x) => x.id === taskId);
-    const text = renderText(t.command, buildVariables(state.delivery));
+    const text = renderText(t.commands[idx].text, buildVariables(state.delivery));
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -706,15 +765,24 @@
     setTimeout(() => { btn.textContent = 'Copier'; btn.classList.remove('copied'); }, 1500);
   }
 
-  async function copyTable(btn, taskId) {
+  // idx = one table; null = all of them, each preceded by its title.
+  async function copyTable(btn, taskId, idx) {
     const t = state.delivery.tasks.find((x) => x.id === taskId);
-    const table = parseTable(t.table_spec, buildVariables(state.delivery));
-    const html = tableHtmlForWord(table);
+    const vars = buildVariables(state.delivery);
+    let tables = t.link_tables.map((tb) => ({ title: renderText(tb.title, vars), table: parseTable(tb.spec, vars) }))
+      .filter((tb) => tb.table);
+    if (idx !== null) tables = [tables[idx]];
+    const withTitles = tables.length > 1;
+    const titleStyle = 'font-family:Calibri,Arial,sans-serif;font-size:11pt;font-weight:bold;margin:12pt 0 4pt;';
+    const html = tables.map(({ title, table }) => (withTitles && title ? `<p style="${titleStyle}">${esc(title)}</p>` : '')
+      + tableHtmlForWord(table)).join('<p></p>');
+    const text = tables.map(({ title, table }) => (withTitles && title ? `${title}\n` : '') + tableText(table)).join('\n\n');
+    const label = btn.textContent;
     let ok = false;
     try {
       await navigator.clipboard.write([new ClipboardItem({
         'text/html': new Blob([html], { type: 'text/html' }),
-        'text/plain': new Blob([tableText(table)], { type: 'text/plain' }),
+        'text/plain': new Blob([text], { type: 'text/plain' }),
       })]);
       ok = true;
     } catch {
@@ -733,7 +801,7 @@
     }
     if (!ok) { toast('Copie refusée par le navigateur : utilisez « Télécharger en .docx ».', true); return; }
     btn.textContent = 'Copié ✓ — collez dans Word';
-    setTimeout(() => { btn.textContent = 'Copier pour Word'; }, 2200);
+    setTimeout(() => { btn.textContent = label; }, 2200);
   }
 
   async function postComment(taskId) {
@@ -768,9 +836,10 @@
       if (action === 'done' || action === 'skip') state.expanded.delete(id);
       await setDelivery(d);
     },
-    copy: (el) => copyCommand(el, Number(el.dataset.id)),
-    'copy-table': (el) => copyTable(el, Number(el.dataset.id)),
-    'table-docx': (el) => run(API.exportTaskTable(Number(el.dataset.id))),
+    copy: (el) => copyCommand(el, Number(el.dataset.id), Number(el.dataset.idx)),
+    'copy-table': (el) => copyTable(el, Number(el.dataset.id), el.dataset.idx === undefined ? null : Number(el.dataset.idx)),
+    'table-docx': (el) => run(API.exportTaskTable(Number(el.dataset.id),
+      el.dataset.idx === undefined ? null : Number(el.dataset.idx))),
     comment: (el) => postComment(Number(el.dataset.id)),
     async 'delete-comment'(el) {
       if (!(await confirmBox('Supprimer ce commentaire ?'))) return;

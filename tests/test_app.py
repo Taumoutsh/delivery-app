@@ -99,15 +99,16 @@ class ApiTest(unittest.TestCase):
             self.assertIn("word/media/image1.png", z.namelist())
             self.assertIn("https://wiki.example.com/releases/3.1.0", z.read("word/_rels/document.xml.rels").decode())
 
-        with_table = next(t for t in d["tasks"] if t["table_spec"])
-        status, data = self.call("GET", f"/api/delivery-tasks/{with_table['id']}/table.docx")
-        self.assertEqual(status, 200)
-        with zipfile.ZipFile(io.BytesIO(data)) as z:
-            document = z.read("word/document.xml").decode()
-            self.assertIn("<w:tbl>", document)
-            self.assertIn("<w:hyperlink", document)
-        status, body = self.call("GET", f"/api/delivery-tasks/{first['id']}/table.docx")
-        self.assertEqual(status, 400)
+        with_tables = next(t for t in d["tasks"] if len(t["link_tables"]) > 1)
+        for path, count in (("tables.docx", len(with_tables["link_tables"])), ("table.docx", 2), ("tables/1.docx", 1)):
+            status, data = self.call("GET", f"/api/delivery-tasks/{with_tables['id']}/{path}")
+            self.assertEqual(status, 200, path)
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                document = z.read("word/document.xml").decode()
+                self.assertEqual(document.count("<w:tbl>"), count, path)
+                self.assertIn("<w:hyperlink", document)
+        self.assertEqual(self.call("GET", f"/api/delivery-tasks/{with_tables['id']}/tables/9.docx")[0], 400)
+        self.assertEqual(self.call("GET", f"/api/delivery-tasks/{first['id']}/tables.docx")[0], 400)
 
         _, d = self.call("PUT", f"/api/deliveries/{d['id']}", {"status": "done"})
         self.assertEqual(d["status"], "done")
@@ -126,9 +127,17 @@ class ApiTest(unittest.TestCase):
         _, before = self.call("GET", "/api/tasks")
         _, d = self.call("POST", "/api/deliveries", {"version": "1.2.0"})
         _, d = self.call("POST", f"/api/deliveries/{d['id']}/tasks",
-                         {"title": "Nouvelle", "command": "echo {{version}}", "weight": 2,
-                          "estimated_minutes": 5, "add_to_template": True})
-        self.assertEqual(d["tasks"][-1]["title"], "Nouvelle")
+                         {"title": "Nouvelle", "weight": 2, "estimated_minutes": 5, "add_to_template": True,
+                          "commands": [{"label": " Linux ", "text": "echo {{version}}"}, {"label": "vide", "text": "  "},
+                                       {"text": "dir"}],
+                          "link_tables": [{"title": "A", "spec": "x | y"}, {"title": "B", "spec": ""}]})
+        task = d["tasks"][-1]
+        self.assertEqual(task["title"], "Nouvelle")
+        self.assertEqual(task["commands"], [{"label": "Linux", "text": "echo {{version}}"}, {"label": "", "text": "dir"}])
+        self.assertEqual(task["link_tables"], [{"title": "A", "spec": "x | y"}])
+        self.assertNotIn("command", task)
+        _, d = self.call("PUT", f"/api/delivery-tasks/{task['id']}", {"title": "Renommée"})
+        self.assertEqual(d["tasks"][-1]["commands"], task["commands"])  # untouched lists are kept
         _, after = self.call("GET", "/api/tasks")
         self.assertEqual(len(after), len(before) + 1)
 
@@ -285,6 +294,20 @@ class CompatibilityTest(unittest.TestCase):
                     d = db.task_action(d["tasks"][0]["id"], "done")
                     self.assertGreater(d["progress"], 0)
                     db.conn.close()
+
+    def test_v2_single_command_and_table_become_lists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = load_fixture(2, tmp)
+            raw = sqlite3.connect(str(path))
+            legacy = {r[0]: (r[1], r[2]) for r in raw.execute("SELECT id, command, table_spec FROM delivery_tasks")}
+            raw.close()
+            db = Database(path)
+            for task_id, (command, spec) in legacy.items():
+                task = db.get_delivery_task(task_id)
+                self.assertEqual(task["commands"], [{"label": "", "text": command}] if command.strip() else [])
+                self.assertEqual(task["link_tables"], [{"title": "", "spec": spec}] if spec.strip() else [])
+            self.assertTrue(any(spec.strip() for _, spec in legacy.values()))
+            db.conn.close()
 
     def test_newer_database_is_refused_untouched(self):
         with tempfile.TemporaryDirectory() as tmp:

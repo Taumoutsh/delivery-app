@@ -83,10 +83,13 @@ def build_docx(delivery, db):
         doc.paragraph(doc.run(_task_meta(t), color="55606E", size=9))
         if t["description"]:
             doc.paragraph(doc.run(render_command(t["description"], variables)))
-        if t["command"]:
-            doc.code(render_command(t["command"], variables))
-        table = parse_table(t.get("table_spec"), variables)
-        if table:
+        for cmd in t["commands"]:
+            if cmd["label"]:
+                doc.paragraph(doc.run(render_command(cmd["label"], variables), bold=True, size=9), keep_next=True, after=0)
+            doc.code(render_command(cmd["text"], variables))
+        for title, table in _tables(t, variables):
+            if title:
+                doc.paragraph(doc.run(title, bold=True), keep_next=True, after=60)
             _docx_table(doc, table)
         for c in t["comments"]:
             doc.paragraph(doc.run(f"{fmt_date(c['created_at'])} — ", bold=True) + doc.run(c["body"]))
@@ -99,13 +102,33 @@ def build_docx(delivery, db):
     return doc.to_bytes()
 
 
-def build_table_docx(task, delivery):
-    """A .docx holding only the task's link table, ready to insert into another document."""
-    table = parse_table(task.get("table_spec"), build_variables(delivery))
-    if not table:
+def _tables(task, variables):
+    """[(rendered title, parsed table)] for the task's non-empty link tables."""
+    out = []
+    for item in task["link_tables"]:
+        table = parse_table(item["spec"], variables)
+        if table:
+            out.append((render_command(item["title"], variables), table))
+    return out
+
+
+def build_table_docx(task, delivery, index=None):
+    """A .docx holding only the task's link tables (or the one at `index`), ready to insert elsewhere.
+
+    With several tables each one is preceded by its title.
+    """
+    tables = _tables(task, build_variables(delivery))
+    if index is not None:
+        if not 0 <= index < len(tables):
+            raise ValueError("Tableau introuvable.")
+        tables = [tables[index]]
+    if not tables:
         raise ValueError("Cette tâche n'a pas de tableau.")
     doc = Docx(task["title"])
-    _docx_table(doc, table)
+    for title, table in tables:
+        if title and len(tables) > 1:
+            doc.paragraph(doc.run(title, bold=True), keep_next=True, after=60)
+        _docx_table(doc, table)
     return doc.to_bytes()
 
 
@@ -139,10 +162,15 @@ def build_pdf(delivery, db):
         doc.text(_task_meta(t), size=8, color=pdf.MUTED, after=5)
         if t["description"]:
             doc.text(render_command(t["description"], variables), size=9.5)
-        if t["command"]:
-            doc.code(render_command(t["command"], variables))
-        table = parse_table(t.get("table_spec"), variables)
-        if table:
+        for cmd in t["commands"]:
+            if cmd["label"]:
+                doc.ensure(40)  # keep the label with its command
+                doc.text(render_command(cmd["label"], variables), pdf.BOLD, 8.5, after=0)
+            doc.code(render_command(cmd["text"], variables))
+        for title, table in _tables(t, variables):
+            if title:
+                doc.ensure(70)  # keep the title with the table header and first row
+                doc.text(title, pdf.BOLD, 9.5, after=3)
             doc.table([[_pdf_cell(c) for c in table["headers"]]] + [[_pdf_cell(c) for c in r] for r in table["rows"]])
         for c in t["comments"]:
             doc.rich([(f"{fmt_date(c['created_at'])} — ", pdf.BOLD, pdf.INK, None),
