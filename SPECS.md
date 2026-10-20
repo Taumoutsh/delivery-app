@@ -110,7 +110,7 @@ tools/build_pyz.py        produit dist/checklist-livraison.pyz : toute l'app en 
 tools/build_demo.py       génère demo.html autonome (mock-api.js à la place d'api.js)
 tools/build_release.py    assets de release dans dist/ (.pyz, .zip + INSTALLATION.md, SHA256SUMS.txt)
 tools/snapshot_schema.py  fige une base d'exemple de la version de schéma courante (tests/fixtures)
-.github/workflows/release.yml  sur tag vX.Y.Z : tests Python 3.8/3.12 puis release GitHub
+.github/workflows/release.yml  version changée sur main (ou tag vX.Y.Z) : tests Python 3.8/3.12 puis release GitHub
 CHANGELOG.md              notes de chaque version (source des notes de release)
 tests/test_app.py         tests d'API bout en bout (python -m unittest discover tests)
 ```
