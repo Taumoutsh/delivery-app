@@ -22,6 +22,7 @@
     list: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M6 4h7M6 8h7M6 12h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="3" cy="4" r="1" fill="currentColor"/><circle cx="3" cy="8" r="1" fill="currentColor"/><circle cx="3" cy="12" r="1" fill="currentColor"/></svg>',
     file: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M4 1.8h5.2L12.5 5v9.2H4z M9 1.8V5.3h3.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
     up: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M4 10l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+    pencil: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M10.5 2.5l3 3-8 8H2.5v-3z M9 4l3 3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
     trash: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     down: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
   };
@@ -30,7 +31,7 @@
     deliveries: [],
     delivery: null,
     templateTasks: [],
-    settings: { default_variables: {} },
+    settings: { default_variables: {}, app_title: 'Checklist Livraison', app_version: '', schema_version: '' },
     view: 'empty', // empty | delivery | template
     expanded: new Set(),  // finished tasks the user re-opened
     collapsed: new Set(), // unfinished tasks the user folded
@@ -223,8 +224,15 @@
     document.querySelector('.main')?.scrollTo(0, 0);
   }
 
+  function applySettings(settings) {
+    state.settings = settings;
+    document.title = settings.app_title;
+  }
+
   async function openTemplate() {
-    [state.templateTasks, state.settings] = await Promise.all([API.listTasks(), API.getSettings()]);
+    let settings;
+    [state.templateTasks, settings] = await Promise.all([API.listTasks(), API.getSettings()]);
+    applySettings(settings);
     state.view = 'template';
     render();
   }
@@ -256,7 +264,9 @@
       </button>`).join('');
     return `
       <aside class="side">
-        <div class="brand"><span class="brand-mark">${ICONS.check}</span>Checklist Livraison</div>
+        <button class="brand" data-act="app-settings" title="Renommer l'application, voir sa version">
+          <span class="brand-mark">${ICONS.check}</span><span class="brand-name">${esc(state.settings.app_title)}</span>
+          <span class="brand-edit">${ICONS.pencil}</span></button>
         ${API.demo ? '<span class="demo-flag">Démo · données d\'exemple</span>' : ''}
         <nav class="side-nav">
           <button class="btn primary block" data-act="new-delivery">${ICONS.plus}Nouvelle livraison</button>
@@ -264,6 +274,8 @@
         </nav>
         <div class="side-label">Historique des livraisons</div>
         <div class="history">${items || '<div class="side-empty">Aucune livraison pour le moment.</div>'}</div>
+        <button class="side-foot num" data-act="app-settings" title="À propos de l'application">
+          Version ${esc(state.settings.app_version)} · base v${esc(state.settings.schema_version)}</button>
       </aside>`;
   }
 
@@ -984,6 +996,25 @@
   const handlers = {
     'open-delivery': (el) => openDelivery(Number(el.dataset.id)),
     'new-delivery': () => deliveryModal(null),
+    'app-settings': () => {
+      const st = state.settings;
+      modal({
+        title: 'Application',
+        body: `
+          <div class="field"><label for="app-title">Nom de l'application</label>
+            <input type="text" id="app-title" name="app_title" maxlength="60" required value="${esc(st.app_title)}">
+            <span class="hint">Affiché dans la barre latérale, l'onglet du navigateur et les rapports PDF/Word.</span></div>
+          <dl class="about">
+            <dt>Version</dt><dd class="num">${esc(st.app_version)}</dd>
+            <dt>Format de la base</dt><dd class="num">v${esc(st.schema_version)}</dd>
+          </dl>`,
+        async onSubmit(form) {
+          applySettings(await API.saveSettings({ app_title: form.app_title.value }));
+          render();
+          toast('Nom de l\'application enregistré');
+        },
+      });
+    },
     'edit-delivery': () => deliveryModal(state.delivery),
     template: () => openTemplate(),
     menu: (el) => {
@@ -1130,8 +1161,8 @@
       render();
     },
     async 'save-defaults'() {
-      state.settings = await run(API.saveSettings({ default_variables: parseVars(document.getElementById('default-vars').value) }),
-        'Variables par défaut enregistrées');
+      applySettings(await run(API.saveSettings({ default_variables: parseVars(document.getElementById('default-vars').value) }),
+        'Variables par défaut enregistrées'));
       render();
     },
   };
@@ -1189,6 +1220,7 @@
 
   (async function boot() {
     try {
+      applySettings(await API.getSettings());
       await refreshList();
       const last = Number(store.get('lastDelivery'));
       const pick = state.deliveries.find((d) => d.id === last)

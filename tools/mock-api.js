@@ -21,7 +21,10 @@
   }
   const media = (filename, url, mime = 'image/png') => ({ id: `m${nextId()}`, filename, mime, url });
 
-  const settings = { default_variables: { prev_version: '', registry: 'registry.local', env: 'recette' } };
+  const settings = {
+    default_variables: { prev_version: '', registry: 'registry.local', env: 'recette' },
+    app_title: 'Checklist Livraison', app_version: '1.6.0 (démo)', schema_version: 5,
+  };
 
   // Block helpers (same shapes as blocks.js).
   const B = {
@@ -158,7 +161,11 @@
   window.API = {
     demo: true,
     getSettings: () => ok(clone(settings)),
-    saveSettings: (data) => { settings.default_variables = { ...data.default_variables }; return ok(clone(settings)); },
+    saveSettings: (data) => {
+      if (data.default_variables) settings.default_variables = { ...data.default_variables };
+      if (data.app_title !== undefined) settings.app_title = String(data.app_title).trim().slice(0, 60) || 'Checklist Livraison';
+      return ok(clone(settings));
+    },
 
     listTasks: () => ok(clone(template)),
     createTask: (data) => { const t = { id: nextId(), position: template.length, ...fields(data) }; template.push(t); return ok(clone(t)); },

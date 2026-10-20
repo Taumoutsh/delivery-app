@@ -6,6 +6,7 @@ see blocks.py); a type without renderer is simply left out of the reports.
 
 from datetime import datetime, timezone
 
+from . import __version__
 from . import pdf_writer as pdf
 from .db import live_elapsed
 from .docx_writer import Docx
@@ -52,6 +53,11 @@ def _summary(delivery):
     return build_variables(delivery), info
 
 
+def _app_label(db):
+    """« <titre de l'application> <version> », shown on every report."""
+    return f"{db.app_title()} {__version__}"
+
+
 def _task_meta(t):
     return (f"{STATUS_LABELS.get(t['status'], t['status'])} · "
             f"estimé {fmt_duration(t['estimated_minutes'] * 60)} · passé {fmt_duration(live_elapsed(t))} · "
@@ -68,7 +74,9 @@ def _docx_table(doc, table):
 
 def build_docx(delivery, db):
     variables, info = _summary(delivery)
-    doc = Docx(f"Livraison {delivery['version']}")
+    app = _app_label(db)
+    doc = Docx(f"Livraison {delivery['version']}", creator=app)
+    doc.paragraph(doc.run(app, color="55606E", size=9))
     doc.heading(f"Rapport de livraison — {delivery['version']}", 0)
     if delivery["name"]:
         doc.paragraph(doc.run(delivery["name"], italic=True, color="55606E"))
@@ -257,7 +265,9 @@ PDF_RENDERERS = {
 
 def build_pdf(delivery, db):
     variables, info = _summary(delivery)
-    doc = pdf.Pdf(title=f"Livraison {delivery['version']}", footer=f"Rapport de livraison {delivery['version']}")
+    app = _app_label(db)
+    doc = pdf.Pdf(title=f"Livraison {delivery['version']}", footer=f"{app} · Rapport de livraison {delivery['version']}")
+    doc.text(app, size=8.5, color=pdf.MUTED, after=2)
     doc.text(f"Rapport de livraison — {delivery['version']}", pdf.BOLD, 20, after=4)
     if delivery["name"]:
         doc.text(delivery["name"], pdf.ITALIC, 11, pdf.MUTED, after=8)

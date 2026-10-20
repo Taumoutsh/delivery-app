@@ -32,6 +32,8 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E21 | Tout est optionnel ; liens, notes, commandes, tableaux… ajoutés **et triés** dans la tâche | ✅ v1.5 |
 | E22 | Architecture prête pour de nouveaux types d'éléments | ✅ registre d'éléments (§2.2) |
 | E23 | Fenêtre de modification d'une tâche lisible | ✅ v1.5 (sections, cartes repliables) |
+| E24 | Titre « Checklist Livraison » modifiable | ✅ v1.6 (réglage `app_title`) |
+| E25 | Version de l'application visible | ✅ v1.6 (barre latérale, fenêtre « Application », rapports) |
 
 ## 2. Concepts
 
@@ -145,7 +147,18 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
 - Plusieurs tâches peuvent tourner en parallèle. Le temps est calculé côté serveur (UTC),
   l'interface rafraîchit l'affichage chaque seconde. Dépassement de l'estimé affiché en orange.
 
-### 2.7 Progression
+### 2.7 Nom et version de l'application
+
+- **Nom** : réglage `app_title` (table `settings`, défaut « Checklist Livraison », 60 caractères
+  maximum, espaces superflus retirés, vide = défaut). Modifié depuis la fenêtre « Application »
+  (clic sur le titre de la barre latérale ou sur la version en bas). Affiché dans la barre latérale,
+  l'onglet du navigateur, l'en-tête et le pied de page des rapports PDF, l'en-tête et les
+  propriétés (auteur) des rapports Word.
+- **Version** : `delivery_app.__version__` (source unique, voir §7), renvoyée par
+  `GET /api/settings` (`app_version`, avec `schema_version`), affichée en bas de la barre latérale,
+  dans la fenêtre « Application », dans les rapports et au démarrage du serveur (`--version`).
+
+### 2.8 Progression
 
 `progression = Σ estimé(validées) / Σ estimé(toutes sauf non applicables)`, une tâche sans
 estimation comptant pour 1 minute (`db.weight_of`). La barre est segmentée : un segment par tâche,
@@ -196,7 +209,7 @@ Choix :
 
 ### 3.1 Schéma (version 5)
 
-- `settings(key, value)` — `schema_version`, `default_variables` (JSON).
+- `settings(key, value)` — `schema_version`, `default_variables` (JSON), `app_title`.
 - `template_tasks(id, position, title, description, blocks JSON, estimated_minutes, created_at,
   updated_at)` + colonnes historiques inutilisées : `command`, `table_spec`, `commands`,
   `link_tables`, `weight`.
@@ -258,7 +271,7 @@ Toute requête qui modifie quelque chose doit porter `X-Checklist: 1` (§2.4).
 
 | Méthode | Route | Rôle |
 |---------|-------|------|
-| GET/PUT | `/api/settings` | variables par défaut |
+| GET/PUT | `/api/settings` | `default_variables`, `app_title` (PUT partiel : seules les clés envoyées changent) ; GET ajoute `app_version`, `schema_version` |
 | GET/POST | `/api/tasks` | modèle : liste / ajout (`{title, description, estimated_minutes, blocks}`) |
 | PUT/DELETE | `/api/tasks/{id}` | modèle : modifier / supprimer |
 | POST | `/api/tasks/reorder` | `{ids:[…]}` |
@@ -284,7 +297,9 @@ Les mutations d'une livraison renvoient la livraison complète (l'UI se re-rend 
 
 ## 4. Interface
 
-- Barre latérale : nouvelle livraison, modèle de tâches, historique (version, nom, date, % ou « Clôturée »).
+- Barre latérale : nom de l'application (cliquable : fenêtre « Application »), nouvelle livraison,
+  modèle de tâches, historique (version, nom, date, % ou « Clôturée »), en bas la version de
+  l'application et du format de base.
 - Vue livraison : en-tête (version, nom, exports PDF/Word, clôturer, menu), puces de variables,
   carte de progression, liste des tâches, ajout de tâche.
 - Carte de tâche : validation, titre, statut, estimé, compteurs par type d'élément, chrono,
@@ -302,7 +317,7 @@ Les mutations d'une livraison renvoient la livraison complète (l'UI se re-rend 
 
 ## 5. Rapport (PDF / Word)
 
-Titre, statut, dates, progression, compteurs, temps passé/estimé, variables ; tableau de synthèse
+« <nom de l'application> <version> », titre, statut, dates, progression, compteurs, temps passé/estimé, variables ; tableau de synthèse
 (tâche, statut, estimé, passé) ; détail par tâche : méta (statut, temps, dates), description,
 éléments dans leur ordre avec variables **résolues** (rendu par type, §2.2), commentaires
 horodatés, captures de la livraison.
@@ -333,3 +348,6 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
   (E19), programmes lançables (E20), images et vidéos (E18), notes ; poids supprimé, progression au
   temps estimé (E6) ; éditeur repensé (E23) ; protections contre les requêtes d'autres sites ;
   schéma v5.
+- **v1.5.1** — Correctif : seul le contenu de la fenêtre de modification défile.
+- **v1.6** — Nom de l'application modifiable (E24), version visible dans l'interface et les
+  rapports (E25). Pas de changement de schéma.
