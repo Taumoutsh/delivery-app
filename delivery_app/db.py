@@ -77,12 +77,25 @@ CREATE TABLE IF NOT EXISTS images (
     mime             TEXT NOT NULL,
     size             INTEGER NOT NULL,
     data             BLOB NOT NULL,
+    created_at       TEXT NOT NULL,
+    reference        INTEGER NOT NULL DEFAULT 0  -- 1 = copied from the template task at creation
+);
+
+-- Reference screenshots of a template task, copied into each new delivery.
+CREATE TABLE IF NOT EXISTS template_images (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_task_id INTEGER NOT NULL REFERENCES template_tasks(id) ON DELETE CASCADE,
+    filename         TEXT NOT NULL,
+    mime             TEXT NOT NULL,
+    size             INTEGER NOT NULL,
+    data             BLOB NOT NULL,
     created_at       TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_dtasks_delivery ON delivery_tasks(delivery_id);
 CREATE INDEX IF NOT EXISTS idx_comments_task ON comments(delivery_task_id);
 CREATE INDEX IF NOT EXISTS idx_images_task ON images(delivery_task_id);
+CREATE INDEX IF NOT EXISTS idx_template_images_task ON template_images(template_task_id);
 """
 
 
@@ -104,11 +117,26 @@ def _migrate_v3(conn):
                          (json.dumps(commands, ensure_ascii=False), json.dumps(tables, ensure_ascii=False), task_id))
 
 
+def _migrate_v4(conn):
+    """v4: reference screenshots on template tasks, copied into deliveries."""
+    conn.execute("""CREATE TABLE template_images (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        template_task_id INTEGER NOT NULL REFERENCES template_tasks(id) ON DELETE CASCADE,
+        filename         TEXT NOT NULL,
+        mime             TEXT NOT NULL,
+        size             INTEGER NOT NULL,
+        data             BLOB NOT NULL,
+        created_at       TEXT NOT NULL)""")
+    conn.execute("CREATE INDEX idx_template_images_task ON template_images(template_task_id)")
+    conn.execute("ALTER TABLE images ADD COLUMN reference INTEGER NOT NULL DEFAULT 0")
+
+
 # version -> step upgrading a database from (version - 1). Steps run in order, in one transaction.
 # Never edit a released step: add a new one.
 MIGRATIONS = {
     2: _migrate_v2,
     3: _migrate_v3,
+    4: _migrate_v4,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 
@@ -286,7 +314,13 @@ class Database:
 
     def list_template_tasks(self):
         with self._lock:
-            return [_task_out(t) for t in self._all("SELECT * FROM template_tasks ORDER BY position, id")]
+            tasks = [_task_out(t) for t in self._all("SELECT * FROM template_tasks ORDER BY position, id")]
+            for t in tasks:
+                t["images"] = self._all("SELECT id, filename, mime, size, created_at FROM template_images"
+                                        " WHERE template_task_id=? ORDER BY id", (t["id"],))
+                for img in t["images"]:
+                    img["url"] = f"/api/template-images/{img['id']}"
+            return tasks
 
     def create_template_task(self, data):
         ts = now_iso()
@@ -346,11 +380,16 @@ class Database:
                 (version, str(data.get("name") or "").strip(), json.dumps(variables), ts))
             delivery_id = cur.lastrowid
             for t in self._all("SELECT * FROM template_tasks ORDER BY position, id"):
-                self.conn.execute(
+                task_id = self.conn.execute(
                     "INSERT INTO delivery_tasks (delivery_id, template_task_id, position, title, description,"
                     " commands, link_tables, weight, estimated_minutes) VALUES (?,?,?,?,?,?,?,?,?)",
                     (delivery_id, t["id"], t["position"], t["title"], t["description"], t["commands"],
-                     t["link_tables"], t["weight"], t["estimated_minutes"]))
+                     t["link_tables"], t["weight"], t["estimated_minutes"])).lastrowid
+                # Copies, not links: editing the template later never changes this delivery.
+                self.conn.execute(
+                    "INSERT INTO images (delivery_task_id, filename, mime, size, data, created_at, reference)"
+                    " SELECT ?, filename, mime, size, data, created_at, 1 FROM template_images"
+                    " WHERE template_task_id=? ORDER BY id", (task_id, t["id"]))
         return self.get_delivery(delivery_id)
 
     def get_delivery(self, delivery_id):
@@ -365,10 +404,11 @@ class Database:
                 t["comments"] = self._all(
                     "SELECT id, body, created_at FROM comments WHERE delivery_task_id=? ORDER BY id", (t["id"],))
                 t["images"] = self._all(
-                    "SELECT id, filename, mime, size, created_at FROM images WHERE delivery_task_id=? ORDER BY id",
-                    (t["id"],))
+                    "SELECT id, filename, mime, size, created_at, reference FROM images WHERE delivery_task_id=?"
+                    " ORDER BY reference DESC, id", (t["id"],))
                 for img in t["images"]:
                     img["url"] = f"/api/images/{img['id']}"
+                    img["reference"] = bool(img["reference"])
             d["tasks"] = tasks
             d["progress"] = progress_of(tasks)
             return d
@@ -514,6 +554,43 @@ class Database:
     def get_image(self, image_id):
         with self._lock:
             return self._one("SELECT * FROM images WHERE id=?", (image_id,))
+
+    def image_to_template(self, image_id):
+        """Copy a delivery screenshot onto the template task it came from (reference for next deliveries)."""
+        with self._lock, self.conn:
+            row = self._one("SELECT i.*, t.template_task_id, t.delivery_id FROM images i JOIN delivery_tasks t"
+                            " ON t.id = i.delivery_task_id WHERE i.id=?", (image_id,))
+            if not row:
+                return None
+            if not row["template_task_id"] or not self._one("SELECT id FROM template_tasks WHERE id=?",
+                                                            (row["template_task_id"],)):
+                raise ValueError("Cette tâche ne provient pas du modèle (ou sa tâche modèle a été supprimée).")
+            self.conn.execute(
+                "INSERT INTO template_images (template_task_id, filename, mime, size, data, created_at)"
+                " VALUES (?,?,?,?,?,?)",
+                (row["template_task_id"], row["filename"], row["mime"], row["size"], row["data"], now_iso()))
+        return self.get_delivery(row["delivery_id"])
+
+    # -- template images --------------------------------------------------
+
+    def add_template_image(self, task_id, filename, mime, data):
+        with self._lock, self.conn:
+            if not self._one("SELECT id FROM template_tasks WHERE id=?", (task_id,)):
+                return None
+            self.conn.execute(
+                "INSERT INTO template_images (template_task_id, filename, mime, size, data, created_at)"
+                " VALUES (?,?,?,?,?,?)", (task_id, filename, mime, len(data), sqlite3.Binary(data), now_iso()))
+        return self.list_template_tasks()
+
+    def get_template_image(self, image_id):
+        with self._lock:
+            return self._one("SELECT * FROM template_images WHERE id=?", (image_id,))
+
+    def delete_template_image(self, image_id):
+        with self._lock, self.conn:
+            if not self.conn.execute("DELETE FROM template_images WHERE id=?", (image_id,)).rowcount:
+                return None
+        return self.list_template_tasks()
 
     def delete_image(self, image_id):
         with self._lock, self.conn:

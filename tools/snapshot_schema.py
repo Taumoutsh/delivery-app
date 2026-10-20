@@ -24,10 +24,12 @@ PNG = bytes.fromhex(
 
 
 def populate(db):
-    """Sample data touching every table, using only calls that exist since schema v1."""
+    """Sample data touching every table (calls added later are guarded by hasattr)."""
     db.save_settings({"default_variables": {"prev_version": "", "env": "recette"}})
     db.create_template_task({"title": "Tâche ajoutée au modèle", "command": "echo {{version}}",
                              "weight": 2, "estimated_minutes": 5})
+    if hasattr(db, "add_template_image"):  # schema v4+
+        db.add_template_image(db.list_template_tasks()[0]["id"], "reference.png", "image/png", PNG)
     closed = db.create_delivery({"version": "1.0.0", "name": "Ancienne livraison",
                                  "variables": {"prev_version": "0.9.0", "env": "prod"}})
     for t in closed["tasks"]:

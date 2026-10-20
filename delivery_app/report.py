@@ -48,6 +48,10 @@ def _summary(delivery):
     return build_variables(delivery), info
 
 
+def _caption(img):
+    return f"Référence (modèle) — {img['filename']}" if img.get("reference") else img["filename"]
+
+
 def _task_meta(t):
     return (f"{STATUS_LABELS.get(t['status'], t['status'])} · poids {t['weight']} · "
             f"estimé {fmt_duration(t['estimated_minutes'] * 60)} · passé {fmt_duration(live_elapsed(t))} · "
@@ -96,7 +100,7 @@ def build_docx(delivery, db):
         for img in t["images"]:
             blob = db.get_image(img["id"])
             if doc.image(blob["data"], img["filename"]):
-                doc.paragraph(doc.run(img["filename"], italic=True, color="55606E", size=8.5))
+                doc.paragraph(doc.run(_caption(img), italic=True, color="55606E", size=8.5))
             else:
                 doc.paragraph(doc.run(f"[image non intégrable : {img['filename']}]", italic=True))
     return doc.to_bytes()
@@ -179,7 +183,7 @@ def build_pdf(delivery, db):
             blob = db.get_image(img["id"])
             try:
                 doc.image(blob["data"], cache_key=img["id"])
-                doc.text(img["filename"], pdf.ITALIC, 8, pdf.MUTED)
+                doc.text(_caption(img), pdf.ITALIC, 8, pdf.MUTED)
             except Exception:
                 doc.text(f"[image non intégrable : {img['filename']}]", pdf.ITALIC, 8.5, pdf.MUTED)
         doc.space(6)

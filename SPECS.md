@@ -25,6 +25,7 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E14 | Tout embarquer : l'environnement cible n'exécute qu'un Python (pas de pip, pas d'internet) | ✅ stdlib uniquement |
 | E15 | Plusieurs lignes de commande par tâche | ✅ blocs libellés, un bouton Copier chacun |
 | E16 | Plusieurs éléments Word (tableaux) par tâche | ✅ tableaux titrés, copie/.docx un par un ou tous |
+| E17 | Captures d'écran sur une tâche du modèle | ✅ copiées comme « captures de référence » dans chaque livraison |
 
 ## 2. Concepts
 
@@ -85,7 +86,21 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
 - Le tableau figure aussi dans les rapports PDF (liens cliquables) et Word (hyperliens).
 - Parseur en double : `templating.parse_table` (Python) et `parseTable` (`app.js`) — les garder alignés.
 
-### 2.4 Statuts et chrono
+### 2.4 Captures (E12, E17)
+
+- **Captures de livraison** : ajoutées pendant la livraison (bouton, sélection multiple, Ctrl+V dans la
+  tâche). Le navigateur convertit tout format en PNG/JPEG avant l'envoi.
+- **Captures de référence** : attachées à une tâche du **modèle** (bouton « Capture de référence » ou
+  Ctrl+V après avoir cliqué sur la ligne). À la création d'une livraison, elles sont **copiées** dans
+  la tâche (`images.reference = 1`) : afficher l'état attendu, une procédure, etc. Copie et non
+  lien, pour que l'historique ne change jamais : supprimer ou remplacer une capture du modèle ne
+  modifie pas les livraisons existantes. Coût : l'image est dupliquée dans chaque livraison.
+- Dans une livraison, la tâche montre « Captures de référence du modèle » puis « Captures ».
+  Le bouton « → modèle » (au survol d'une capture) copie une capture de livraison dans la tâche modèle
+  d'origine, pour les livraisons suivantes.
+- Rapports : toutes les captures, légende « Référence (modèle) — fichier » pour celles du modèle.
+
+### 2.5 Statuts et chrono
 
 `todo` → `running` ⇄ `paused` → `done` | `skipped` (non applicable).
 
@@ -97,7 +112,7 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
 - Plusieurs tâches peuvent tourner en parallèle. Le temps est calculé côté serveur (UTC),
   l'interface rafraîchit l'affichage chaque seconde. Dépassement de l'estimé affiché en orange.
 
-### 2.5 Progression
+### 2.6 Progression
 
 `progression = Σ poids(validées) / Σ poids(toutes sauf non applicables)`.
 La barre est segmentée : un segment par tâche, largeur proportionnelle au poids, couleur selon
@@ -148,7 +163,7 @@ Choix :
 - Variables d'environnement : `DELIVERY_PORT`, `DELIVERY_HOST`, `DELIVERY_DATA`.
 - Polices IBM Plex (licence OFL) embarquées dans `static/fonts/` (sous-ensemble latin, ~150 Ko).
 
-### 3.1 Schéma (version 3)
+### 3.1 Schéma (version 4)
 
 - `settings(key, value)` — `schema_version`, `default_variables` (JSON).
 - `template_tasks(id, position, title, description, commands JSON, link_tables JSON, weight, estimated_minutes,
@@ -158,7 +173,8 @@ Choix :
   description, commands JSON, link_tables JSON, weight, estimated_minutes, status, elapsed_seconds, running_since,
   started_at, completed_at)`
 - `comments(id, delivery_task_id, body, created_at)`
-- `images(id, delivery_task_id, filename, mime, size, data BLOB, created_at)`
+- `images(id, delivery_task_id, filename, mime, size, data BLOB, created_at, reference)`
+- `template_images(id, template_task_id, filename, mime, size, data BLOB, created_at)`
 
 Horodatages en UTC ISO-8601 (`2026-10-20T15:47:40Z`). Suppressions en cascade.
 ### 3.2 Compatibilité des bases (procédure obligatoire)
@@ -174,7 +190,8 @@ La version du schéma est stockée dans `settings.schema_version`. Au démarrage
 
 Historique : v1 → v2 ajoute `table_spec` aux deux tables de tâches ; v2 → v3 ajoute `commands` et
 `link_tables` (listes JSON) et y reprend l'ancienne commande et l'ancien tableau de chaque tâche.
-L'API n'expose plus `command` / `table_spec`.
+L'API n'expose plus `command` / `table_spec`. v3 → v4 crée `template_images` et ajoute
+`images.reference`.
 
 Pour toute évolution qui touche la base :
 
@@ -215,6 +232,9 @@ la sauvegarde `.bak` permet de revenir en arrière avec l'ancienne version de l'
 | POST | `/api/delivery-tasks/{id}/comments` | `{body}` |
 | POST | `/api/delivery-tasks/{id}/images` | corps brut, `Content-Type` PNG/JPEG, en-tête `X-Filename` |
 | GET/DELETE | `/api/images/{id}` | image / suppression |
+| POST | `/api/images/{id}/to-template` | copie une capture de livraison dans la tâche modèle d'origine |
+| POST | `/api/tasks/{id}/images` | capture de référence sur une tâche du modèle (corps brut PNG/JPEG) |
+| GET/DELETE | `/api/template-images/{id}` | capture de référence / suppression (renvoie le modèle) |
 | DELETE | `/api/comments/{id}` | suppression |
 
 Les mutations d'une livraison renvoient la livraison complète (l'UI se re-rend avec).
@@ -230,8 +250,8 @@ Les mutations d'une livraison renvoient la livraison complète (l'UI se re-rend 
   (Copier pour Word / .docx par tableau, ou tous), captures (miniatures → visionneuse
   avec flèches/Échap), commentaires (Ctrl+Entrée pour publier, Ctrl+V pour coller une capture).
 - Tâches validées repliées par défaut (dépliables) ; tâches ouvertes dépliées (repliables).
-- Vue modèle : liste ordonnable, ajout/modification/suppression, aide sur les variables,
-  variables par défaut.
+- Vue modèle : liste ordonnable, ajout/modification/suppression, captures de référence par tâche,
+  aide sur les variables, variables par défaut.
 - Thème clair/sombre automatique, responsive jusqu'à ~400 px.
 
 ## 5. Rapport (PDF / Word)
@@ -263,3 +283,4 @@ description et commandes **résolues**, tableau de liens, commentaires horodaté
   automatique avant migration, refus d'une base plus récente, fixtures v1/v2 et tests de compatibilité.
 - **v1.3 (2026-10-20)** — Plusieurs blocs de commande et plusieurs tableaux Word par tâche (E15, E16),
   schéma v3.
+- **v1.4 (2026-10-20)** — Captures de référence sur les tâches du modèle (E17), schéma v4.

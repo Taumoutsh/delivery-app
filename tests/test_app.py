@@ -141,6 +141,38 @@ class ApiTest(unittest.TestCase):
         _, after = self.call("GET", "/api/tasks")
         self.assertEqual(len(after), len(before) + 1)
 
+    def test_template_screenshots_are_copied_into_deliveries(self):
+        _, tasks = self.call("GET", "/api/tasks")
+        tpl = tasks[1]
+        status, tasks = self.call("POST", f"/api/tasks/{tpl['id']}/images", raw=PNG,
+                                  headers={"Content-Type": "image/png", "X-Filename": "attendu.png"})
+        self.assertEqual(status, 200)
+        ref = next(t for t in tasks if t["id"] == tpl["id"])["images"][0]
+        self.assertEqual(self.call("GET", ref["url"])[1], PNG)
+
+        _, d = self.call("POST", "/api/deliveries", {"version": "4.0.0"})
+        task = next(t for t in d["tasks"] if t["template_task_id"] == tpl["id"])
+        self.assertEqual([(i["filename"], i["reference"]) for i in task["images"]], [("attendu.png", True)])
+
+        # Removing it from the template leaves the delivery's copy alone (history is never rewritten).
+        _, tasks = self.call("DELETE", ref["url"])
+        self.assertEqual(next(t for t in tasks if t["id"] == tpl["id"])["images"], [])
+        _, d = self.call("GET", f"/api/deliveries/{d['id']}")
+        task = next(t for t in d["tasks"] if t["template_task_id"] == tpl["id"])
+        self.assertEqual(len(task["images"]), 1)
+
+        # A screenshot taken during a delivery can become the template's reference.
+        _, d = self.call("POST", f"/api/delivery-tasks/{task['id']}/images", raw=PNG,
+                         headers={"Content-Type": "image/png", "X-Filename": "nouvelle.png"})
+        own = next(i for i in next(t for t in d["tasks"] if t["id"] == task["id"])["images"] if not i["reference"])
+        status, _ = self.call("POST", f"/api/images/{own['id']}/to-template")
+        self.assertEqual(status, 200)
+        _, tasks = self.call("GET", "/api/tasks")
+        self.assertEqual([i["filename"] for i in next(t for t in tasks if t["id"] == tpl["id"])["images"]],
+                         ["nouvelle.png"])
+        for fmt in ("pdf", "docx"):
+            self.assertEqual(self.call("GET", f"/api/deliveries/{d['id']}/report.{fmt}")[0], 200)
+
     def test_static_files_and_traversal(self):
         req = urllib.request.urlopen(self.base + "/fonts/fonts.css")
         self.assertIn(b"@font-face", req.read())
