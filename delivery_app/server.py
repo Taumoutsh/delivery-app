@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, unquote, urlparse
 
 from . import __version__, launcher, report
+from .db import DeliveryClosed
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_IMAGE = 15 * 1024 * 1024
@@ -326,6 +327,8 @@ class Handler(BaseHTTPRequestHandler):
             self.serve_static(path)
         except HttpError as exc:
             self.send_json({"error": exc.message}, exc.status)
+        except DeliveryClosed as exc:
+            self.send_json({"error": str(exc), "closed": True}, HTTPStatus.CONFLICT)
         except ValueError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception:
