@@ -194,6 +194,13 @@ SCHEMA_VERSION = max(MIGRATIONS)
 class SchemaTooNew(Exception):
     """The database was written by a more recent version of the app."""
 
+
+class DeliveryClosed(Exception):
+    """A closed delivery is read-only until it is reopened."""
+
+    def __init__(self):
+        super().__init__("Livraison clôturée : rouvrez-la pour la modifier.")
+
 # (title, description, estimated minutes, blocks) — examples to adapt.
 SEED_TASKS = [
     ("Mettre à jour le numéro de version",
@@ -470,6 +477,10 @@ class Database:
             d = self._one("SELECT * FROM deliveries WHERE id=?", (delivery_id,))
             if not d:
                 return None
+            if d["status"] == "done":
+                if data.get("status") != "in_progress":
+                    raise DeliveryClosed()
+                data = {"status": "in_progress"}  # reopening changes nothing else
             version = str(data.get("version", d["version"])).strip() or d["version"]
             name = str(data.get("name", d["name"])).strip()
             variables = d["variables"]
@@ -479,6 +490,11 @@ class Database:
             if data.get("status") in ("in_progress", "done") and data["status"] != status:
                 status = data["status"]
                 completed_at = now_iso() if status == "done" else None
+                if status == "done":  # closing stops the timers still running
+                    for t in self._all("SELECT * FROM delivery_tasks WHERE delivery_id=? AND status='running'",
+                                       (delivery_id,)):
+                        self.conn.execute("UPDATE delivery_tasks SET status='paused', running_since=NULL,"
+                                          " elapsed_seconds=? WHERE id=?", (live_elapsed(t), t["id"]))
             self.conn.execute(
                 "UPDATE deliveries SET version=?, name=?, variables=?, status=?, completed_at=? WHERE id=?",
                 (version, name, variables, status, completed_at, delivery_id))
@@ -486,12 +502,19 @@ class Database:
 
     def delete_delivery(self, delivery_id):
         with self._lock, self.conn:
+            self._ensure_open(delivery_id)
             return self.conn.execute("DELETE FROM deliveries WHERE id=?", (delivery_id,)).rowcount > 0
 
     # -- delivery tasks -------------------------------------------------
 
     def _task(self, task_id):
         return self._one("SELECT * FROM delivery_tasks WHERE id=?", (task_id,))
+
+    def _ensure_open(self, delivery_id):
+        """Refuse any change to a closed delivery (it must be reopened first)."""
+        row = self._one("SELECT status FROM deliveries WHERE id=?", (delivery_id,))
+        if row and row["status"] == "done":
+            raise DeliveryClosed()
 
     def get_delivery_task(self, task_id):
         with self._lock:
@@ -502,6 +525,7 @@ class Database:
         with self._lock, self.conn:
             if not self._one("SELECT id FROM deliveries WHERE id=?", (delivery_id,)):
                 return None
+            self._ensure_open(delivery_id)
             template_id = None
             if data.get("add_to_template"):
                 template_id = self.create_template_task(data)["id"]
@@ -517,6 +541,7 @@ class Database:
             current = self._task(task_id)
             if not current:
                 return None
+            self._ensure_open(current["delivery_id"])
             merged = {**_task_out(current), **data}
             self.conn.execute(
                 "UPDATE delivery_tasks SET title=?, description=?, blocks=?, estimated_minutes=? WHERE id=?",
@@ -528,11 +553,13 @@ class Database:
             current = self._task(task_id)
             if not current:
                 return None
+            self._ensure_open(current["delivery_id"])
             self.conn.execute("DELETE FROM delivery_tasks WHERE id=?", (task_id,))
         return self.get_delivery(current["delivery_id"])
 
     def reorder_delivery_tasks(self, delivery_id, ids):
         with self._lock, self.conn:
+            self._ensure_open(delivery_id)
             for pos, task_id in enumerate(ids):
                 self.conn.execute("UPDATE delivery_tasks SET position=? WHERE id=? AND delivery_id=?",
                                   (pos, int(task_id), delivery_id))
@@ -544,6 +571,7 @@ class Database:
             t = self._task(task_id)
             if not t:
                 return None
+            self._ensure_open(t["delivery_id"])
             ts = now_iso()
             elapsed = live_elapsed(t)
             if action == "start":
@@ -578,6 +606,7 @@ class Database:
             t = self._task(task_id)
             if not t:
                 return None
+            self._ensure_open(t["delivery_id"])
             self.conn.execute("INSERT INTO comments (delivery_task_id, body, created_at) VALUES (?,?,?)",
                               (task_id, body, now_iso()))
         return self.get_delivery(t["delivery_id"])
@@ -588,6 +617,7 @@ class Database:
                             " ON t.id = c.delivery_task_id WHERE c.id=?", (comment_id,))
             if not row:
                 return None
+            self._ensure_open(row["delivery_id"])
             self.conn.execute("DELETE FROM comments WHERE id=?", (comment_id,))
         return self.get_delivery(row["delivery_id"])
 
@@ -596,6 +626,7 @@ class Database:
             t = self._task(task_id)
             if not t:
                 return None
+            self._ensure_open(t["delivery_id"])
             self.conn.execute(
                 "INSERT INTO images (delivery_task_id, filename, mime, size, data, created_at) VALUES (?,?,?,?,?,?)",
                 (task_id, filename, mime, len(data), sqlite3.Binary(data), now_iso()))
@@ -696,6 +727,7 @@ class Database:
                             " ON t.id = i.delivery_task_id WHERE i.id=?", (image_id,))
             if not row:
                 return None
+            self._ensure_open(row["delivery_id"])
             self.conn.execute("DELETE FROM images WHERE id=?", (image_id,))
         return self.get_delivery(row["delivery_id"])
 

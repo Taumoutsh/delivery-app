@@ -232,6 +232,46 @@ class ApiTest(unittest.TestCase):
         finally:
             self.server.RequestHandlerClass.allow_launch = True
 
+    def test_closed_delivery_is_read_only_until_reopened(self):
+        _, d = self.call("POST", "/api/deliveries", {"version": "9.1.0"})
+        task = d["tasks"][0]
+        self.call("POST", f"/api/delivery-tasks/{task['id']}/action", {"action": "start"})
+        self.call("POST", f"/api/delivery-tasks/{task['id']}/comments", {"body": "avant clôture"})
+        _, d = self.upload(f"/api/delivery-tasks/{task['id']}/images", PNG, "image/png", "c.png")
+        comment, image = d["tasks"][0]["comments"][0], d["tasks"][0]["images"][0]
+
+        _, d = self.call("PUT", f"/api/deliveries/{d['id']}", {"status": "done"})
+        self.assertEqual(d["tasks"][0]["status"], "paused")  # closing stops running timers
+        self.assertIsNone(d["tasks"][0]["running_since"])
+
+        tid, did = task["id"], d["id"]
+        refused = [
+            ("PUT", f"/api/deliveries/{did}", {"name": "x"}),
+            ("PUT", f"/api/deliveries/{did}", {"variables": {"env": "x"}}),
+            ("DELETE", f"/api/deliveries/{did}", None),
+            ("POST", f"/api/deliveries/{did}/tasks", {"title": "x"}),
+            ("POST", f"/api/deliveries/{did}/reorder", {"ids": [tid]}),
+            ("PUT", f"/api/delivery-tasks/{tid}", {"title": "x"}),
+            ("DELETE", f"/api/delivery-tasks/{tid}", None),
+            ("POST", f"/api/delivery-tasks/{tid}/action", {"action": "done"}),
+            ("POST", f"/api/delivery-tasks/{tid}/comments", {"body": "x"}),
+            ("DELETE", f"/api/comments/{comment['id']}", None),
+            ("DELETE", f"/api/images/{image['id']}", None),
+        ]
+        for method, path, body in refused:
+            status, err = self.call(method, path, body)
+            self.assertEqual(status, 409, f"{method} {path}")
+            self.assertIn("rouvrez", err["error"])
+        self.assertEqual(self.upload(f"/api/delivery-tasks/{tid}/images", PNG, "image/png", "d.png")[0], 409)
+        # Reading, exporting and copying to the template stay possible.
+        self.assertEqual(self.call("GET", f"/api/deliveries/{did}/report.pdf")[0], 200)
+        self.assertEqual(self.call("POST", f"/api/images/{image['id']}/to-template")[0], 200)
+
+        _, d = self.call("PUT", f"/api/deliveries/{did}", {"status": "in_progress", "name": "ignoré"})
+        self.assertEqual((d["status"], d["completed_at"], d["name"]), ("in_progress", None, ""))
+        status, d = self.call("POST", f"/api/delivery-tasks/{tid}/action", {"action": "done"})
+        self.assertEqual((status, d["tasks"][0]["status"]), (200, "done"))
+
     def test_app_title_and_version(self):
         from delivery_app import __version__
         _, st = self.call("GET", "/api/settings")

@@ -34,6 +34,7 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E23 | Fenêtre de modification d'une tâche lisible | ✅ v1.5 (sections, cartes repliables) |
 | E24 | Titre « Checklist Livraison » modifiable | ✅ v1.6 (réglage `app_title`) |
 | E25 | Version de l'application visible | ✅ v1.6 (barre latérale, fenêtre « Application », rapports) |
+| E26 | Livraison clôturée non modifiable, sauf si elle est rouverte | ✅ v1.7 (serveur + interface) |
 
 ## 2. Concepts
 
@@ -147,7 +148,20 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
 - Plusieurs tâches peuvent tourner en parallèle. Le temps est calculé côté serveur (UTC),
   l'interface rafraîchit l'affichage chaque seconde. Dépassement de l'estimé affiché en orange.
 
-### 2.7 Nom et version de l'application
+### 2.7 Livraison clôturée (lecture seule)
+
+- « Clôturer » (`status = done`) met en pause les tâches en cours puis fige la livraison.
+- Tant qu'elle est clôturée, le serveur refuse toute modification avec **409** (« Livraison
+  clôturée : rouvrez-la pour la modifier. ») : version, nom, variables, suppression de la livraison,
+  ajout / modification / retrait / réordonnancement de tâche, actions de tâche (démarrer, valider…),
+  commentaires et captures (ajout, suppression). Contrôle centralisé : `Database._ensure_open`.
+- Restent possibles : consultation, déplier/replier, copie, lancement de programmes, exports PDF/Word
+  et .docx, « → modèle » sur une capture (modifie le modèle, pas la livraison).
+- « Rouvrir » (`PUT /api/deliveries/{id}` avec `{status: "in_progress"}`, seul changement accepté sur
+  une livraison clôturée) rend la livraison de nouveau modifiable.
+- L'interface masque les commandes de modification et affiche un bandeau « lecture seule ».
+
+### 2.8 Nom et version de l'application
 
 - **Nom** : réglage `app_title` (table `settings`, défaut « Checklist Livraison », 60 caractères
   maximum, espaces superflus retirés, vide = défaut). Modifié depuis la fenêtre « Application »
@@ -158,7 +172,7 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
   `GET /api/settings` (`app_version`, avec `schema_version`), affichée en bas de la barre latérale,
   dans la fenêtre « Application », dans les rapports et au démarrage du serveur (`--version`).
 
-### 2.8 Progression
+### 2.9 Progression
 
 `progression = Σ estimé(validées) / Σ estimé(toutes sauf non applicables)`, une tâche sans
 estimation comptant pour 1 minute (`db.weight_of`). La barre est segmentée : un segment par tâche,
@@ -351,3 +365,5 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.5.1** — Correctif : seul le contenu de la fenêtre de modification défile.
 - **v1.6** — Nom de l'application modifiable (E24), version visible dans l'interface et les
   rapports (E25). Pas de changement de schéma.
+- **v1.7** — Livraison clôturée en lecture seule jusqu'à sa réouverture (E26), clôture qui met les
+  chronos en pause. Pas de changement de schéma.

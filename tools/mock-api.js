@@ -144,6 +144,8 @@
   }
   const full = (d) => clone({ ...d, progress: progress(d.tasks) });
   const findD = (id) => { const d = deliveries.find((x) => x.id === id); if (!d) throw new Error('Livraison introuvable.'); return d; };
+  // A closed delivery is read-only until reopened (same rule as the server).
+  const ensureOpen = (d) => { if (d.status === 'done') throw new Error('Livraison clôturée : rouvrez-la pour la modifier.'); };
   const findT = (id) => {
     for (const d of deliveries) { const t = d.tasks.find((x) => x.id === id); if (t) return [d, t]; }
     throw new Error('Tâche introuvable.');
@@ -158,8 +160,7 @@
   };
   const ok = (v) => new Promise((r) => setTimeout(() => r(v), 60));
 
-  window.API = {
-    demo: true,
+  const api = {
     getSettings: () => ok(clone(settings)),
     saveSettings: (data) => {
       if (data.default_variables) settings.default_variables = { ...data.default_variables };
@@ -192,26 +193,35 @@
     getDelivery: (id) => ok(full(findD(id))),
     updateDelivery: (id, data) => {
       const d = findD(id);
+      if (d.status === 'done') {
+        if (data.status !== 'in_progress') return Promise.reject(new Error('Livraison clôturée : rouvrez-la pour la modifier.'));
+        data = { status: 'in_progress' };
+      }
+      if (data.status === 'done') {
+        for (const t of d.tasks) if (t.status === 'running') Object.assign(t, { status: 'paused', elapsed_seconds: elapsedNow(t), running_since: null });
+      }
       if (data.version !== undefined) d.version = data.version.trim() || d.version;
       if (data.name !== undefined) d.name = data.name;
       if (data.variables) d.variables = { ...data.variables };
       if (data.status && data.status !== d.status) { d.status = data.status; d.completed_at = data.status === 'done' ? iso(new Date()) : null; }
       return ok(full(d));
     },
-    deleteDelivery: (id) => { deliveries.splice(deliveries.indexOf(findD(id)), 1); return ok({ ok: true }); },
+    deleteDelivery: (id) => { ensureOpen(findD(id)); deliveries.splice(deliveries.indexOf(findD(id)), 1); return ok({ ok: true }); },
     addDeliveryTask: (id, data) => {
       const d = findD(id);
+      ensureOpen(d);
       let tplId = null;
       if (data.add_to_template) { const t = { id: nextId(), position: template.length, ...fields(data) }; template.push(t); tplId = t.id; }
       d.tasks.push(fromTemplate({ ...fields(data), id: tplId }));
       return ok(full(d));
     },
-    reorderDeliveryTasks: (id, ids) => { const d = findD(id); d.tasks.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)); return ok(full(d)); },
+    reorderDeliveryTasks: (id, ids) => { const d = findD(id); ensureOpen(d); d.tasks.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)); return ok(full(d)); },
 
-    updateDeliveryTask: (id, data) => { const [d, t] = findT(id); Object.assign(t, fields({ ...t, ...data })); return ok(full(d)); },
-    deleteDeliveryTask: (id) => { const [d, t] = findT(id); d.tasks.splice(d.tasks.indexOf(t), 1); return ok(full(d)); },
+    updateDeliveryTask: (id, data) => { const [d, t] = findT(id); ensureOpen(d); Object.assign(t, fields({ ...t, ...data })); return ok(full(d)); },
+    deleteDeliveryTask: (id) => { const [d, t] = findT(id); ensureOpen(d); d.tasks.splice(d.tasks.indexOf(t), 1); return ok(full(d)); },
     taskAction: (id, action) => {
       const [d, t] = findT(id);
+      ensureOpen(d);
       const now = iso(new Date());
       const el = elapsedNow(t);
       if (action === 'start' && !['running', 'done', 'skipped'].includes(t.status)) Object.assign(t, { status: 'running', running_since: now, started_at: t.started_at || now });
@@ -224,6 +234,7 @@
     addComment: (id, body) => {
       if (!String(body || '').trim()) return Promise.reject(new Error('Le commentaire est vide.'));
       const [d, t] = findT(id);
+      ensureOpen(d);
       t.comments.push({ id: nextId(), body: body.trim(), created_at: iso(new Date()) });
       return ok(full(d));
     },
@@ -243,6 +254,7 @@
     },
     uploadImage: async (taskId, file) => {
       const [d, t] = findT(taskId);
+      ensureOpen(d);
       t.images.push({ id: nextId(), filename: file.name || 'capture.png', url: await readDataUrl(file) });
       return full(d);
     },
@@ -270,4 +282,12 @@
     exportReport: (id, fmt) => Promise.reject(new Error(
       `Démo : l'export ${fmt === 'pdf' ? 'PDF' : 'Word'} est généré par le serveur Python de l'app locale.`)),
   };
+
+  // Every call returns a promise, errors included (like the real HTTP client).
+  window.API = { demo: true };
+  for (const [name, fn] of Object.entries(api)) {
+    window.API[name] = (...args) => {
+      try { return Promise.resolve(fn(...args)); } catch (err) { return Promise.reject(err); }
+    };
+  }
 })();

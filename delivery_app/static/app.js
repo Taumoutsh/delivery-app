@@ -300,6 +300,7 @@
     const custom = Object.entries(d.variables || {});
     const active = d.tasks.filter((t) => t.status !== 'skipped');
     const doneN = d.tasks.filter(finished).length;
+    const closed = d.status === 'done'; // read-only until reopened
     const doneMin = d.tasks.filter((t) => t.status === 'done').reduce((a, t) => a + t.estimated_minutes, 0);
     const totalMin = active.reduce((a, t) => a + t.estimated_minutes, 0);
 
@@ -316,28 +317,27 @@
         <div class="head-actions">
           <button class="btn" data-act="export" data-fmt="pdf">${ICONS.file}Rapport PDF</button>
           <button class="btn" data-act="export" data-fmt="docx">${ICONS.file}Rapport Word</button>
-          ${d.status === 'done'
-            ? ''
-            : `<button class="btn ok" data-act="close-delivery">${ICONS.check}Clôturer</button>`}
+          ${closed ? `<button class="btn" data-act="reopen-delivery">Rouvrir</button>` : `
+          <button class="btn ok" data-act="close-delivery">${ICONS.check}Clôturer</button>
           <div class="task-actions">
             <button class="btn icon" data-act="menu" data-id="delivery" aria-label="Plus d'actions">${ICONS.more}</button>
             ${state.menuFor === 'delivery' ? `<div class="menu">
               <button data-act="edit-delivery">Modifier version et variables</button>
               <button class="danger" data-act="delete-delivery">Supprimer la livraison</button>
             </div>` : ''}
-          </div>
+          </div>`}
         </div>
       </div>
 
       <div class="chips">
         <span class="chip">{{version}} = <b>${esc(d.version)}</b></span>
         ${custom.map(([k, v]) => `<span class="chip">{{${esc(k)}}} = <b>${v ? esc(v) : '<i>vide</i>'}</b></span>`).join('')}
-        <button class="chip edit" data-act="edit-delivery">Modifier les variables</button>
+        ${closed ? '' : '<button class="chip edit" data-act="edit-delivery">Modifier les variables</button>'}
       </div>
 
-      ${d.status === 'done' ? `<div class="banner">
-        <span>Livraison clôturée le ${fmtDate(d.completed_at, true)}.</span>
-        <button class="btn" data-act="reopen-delivery">Rouvrir</button></div>` : ''}
+      ${closed ? `<div class="banner">
+        <span>Livraison clôturée le ${fmtDate(d.completed_at, true)} : lecture seule. Rouvrez-la pour la modifier.</span>
+      </div>` : ''}
 
       <section class="progress-card" aria-label="Progression">
         <div class="pct num">${d.progress}<small>%</small></div>
@@ -350,11 +350,11 @@
         </div>
       </section>
 
-      <div class="tasks">${d.tasks.map((t, i) => renderTask(t, i, vars)).join('')}</div>
+      <div class="tasks">${d.tasks.map((t, i) => renderTask(t, i, vars, closed)).join('')}</div>
 
-      <div class="add-row">
+      ${closed ? '' : `<div class="add-row">
         <button class="btn" data-act="add-delivery-task">${ICONS.plus}Ajouter une tâche à cette livraison</button>
-      </div>`;
+      </div>`}`;
   }
 
   // Thumbnails of media files ({id, filename, mime, url}). Inside a block, thumbs open the viewer;
@@ -399,12 +399,12 @@
   }
 
   // Screenshots taken during a delivery (scope 'task').
-  function thumbStrip(scope, ownerId, images, { canAdd = true, toTemplate = false, small = false, addLabel = 'Ajouter' } = {}) {
+  function thumbStrip(scope, ownerId, images, { canAdd = true, canDelete = true, toTemplate = false, small = false, addLabel = 'Ajouter' } = {}) {
     return `<div class="thumbs${small ? ' small' : ''}">
       ${images.map((img) => `
         <div class="thumb" role="button" tabindex="0" data-act="lightbox" data-scope="${scope}" data-owner="${ownerId}" data-img="${img.id}" title="${esc(img.filename)}">
           <img src="${esc(img.url)}" alt="${esc(img.filename)}" loading="lazy">
-          <button class="x" data-act="delete-image" data-scope="${scope}" data-id="${img.id}" aria-label="Supprimer l'image">✕</button>
+          ${canDelete ? `<button class="x" data-act="delete-image" data-scope="${scope}" data-id="${img.id}" aria-label="Supprimer l'image">✕</button>` : ''}
           ${toTemplate ? `<button class="to-tpl" data-act="image-to-template" data-id="${img.id}" title="Ajouter au modèle : les prochaines livraisons la recevront">→ modèle</button>` : ''}
         </div>`).join('')}
       ${canAdd ? `<button class="thumb-add" data-act="add-image" data-scope="${scope}" data-id="${ownerId}">${ICONS.plus}<span>${esc(addLabel)}</span></button>
@@ -414,15 +414,16 @@
 
   const imagesOf = (scope, ownerId) => state.delivery.tasks.find((t) => t.id === ownerId)?.images || [];
 
-  function renderTask(t, i, vars) {
+  // closed: the delivery is read-only (only viewing, copying, launching and exporting remain).
+  function renderTask(t, i, vars, closed) {
     const open = isOpen(t);
     const est = t.estimated_minutes;
     const primary = {
       todo: `<button class="btn run" data-act="task" data-action="start" data-id="${t.id}">${ICONS.play}Démarrer</button>`,
       paused: `<button class="btn run" data-act="task" data-action="start" data-id="${t.id}">${ICONS.play}Reprendre</button>`,
       running: `<button class="btn run" data-act="task" data-action="pause" data-id="${t.id}">${ICONS.pause}Pause</button>`,
-    }[t.status] || '';
-    const validate = finished(t) ? '' :
+    }[closed ? '' : t.status] || '';
+    const validate = finished(t) || closed ? '' :
       `<button class="btn ok" data-act="task" data-action="done" data-id="${t.id}">${ICONS.check}Valider</button>`;
 
     const missing = missingVars(taskText(t), vars);
@@ -430,32 +431,33 @@
       <div class="task-body">
         ${t.description ? `<div class="desc">${renderHtml(t.description, vars).replace(/<span class="var[^"]*"[^>]*>/g, '<b>').replace(/<\/span>/g, '</b>')}</div>` : ''}
         ${t.blocks.length ? `<div class="blocks">${renderBlocks(t, vars)}</div>` : ''}
-        ${missing.length ? `<div class="warn-vars">Variable non renseignée : ${missing.map((m) => `{{${esc(m)}}}`).join(', ')} —
-          <a href="#" data-act="edit-delivery">la définir</a></div>` : ''}
-        <div>
+        ${missing.length ? `<div class="warn-vars">Variable non renseignée : ${missing.map((m) => `{{${esc(m)}}}`).join(', ')}${closed ? ''
+          : ' — <a href="#" data-act="edit-delivery">la définir</a>'}</div>` : ''}
+        ${closed && !t.images.length ? '' : `<div>
           <div class="section-label">Captures de la livraison (${t.images.length})</div>
-          ${thumbStrip('task', t.id, t.images, { toTemplate: Boolean(t.template_task_id) })}
-        </div>
-        <div>
+          ${thumbStrip('task', t.id, t.images, { toTemplate: Boolean(t.template_task_id), canAdd: !closed, canDelete: !closed })}
+        </div>`}
+        ${closed && !t.comments.length ? '' : `<div>
           <div class="section-label">Commentaires (${t.comments.length})</div>
           <div class="comments">
             ${t.comments.map((c) => `<div class="comment">
               <time>${fmtDate(c.created_at, true)}</time>
-              <button class="del" data-act="delete-comment" data-id="${c.id}" aria-label="Supprimer le commentaire">Supprimer</button>
+              ${closed ? '' : `<button class="del" data-act="delete-comment" data-id="${c.id}" aria-label="Supprimer le commentaire">Supprimer</button>`}
               <p>${esc(c.body)}</p></div>`).join('')}
-            <div class="comment-form">
+            ${closed ? '' : `<div class="comment-form">
               <textarea id="c-${t.id}" data-draft rows="1" placeholder="Ajouter un commentaire… (Ctrl+Entrée pour publier, Ctrl+V pour coller une capture)" data-comment="${t.id}"></textarea>
               <button class="btn" data-act="comment" data-id="${t.id}">Publier</button>
-            </div>
+            </div>`}
           </div>
-        </div>
+        </div>`}
       </div>`;
 
     return `
       <article class="task ${t.status} ${finished(t) ? 'finished' : ''} ${open ? 'open' : ''}" data-task-id="${t.id}">
         <div class="task-head">
-          <button class="status-btn" data-act="task" data-action="${finished(t) ? 'reopen' : 'done'}" data-id="${t.id}"
-                  aria-label="${finished(t) ? 'Rouvrir la tâche' : 'Valider la tâche'}">${t.status === 'skipped' ? '–' : ICONS.check}</button>
+          ${closed ? `<span class="status-btn" role="img" aria-label="${STATUS[t.status]}">${t.status === 'skipped' ? '–' : ICONS.check}</span>`
+            : `<button class="status-btn" data-act="task" data-action="${finished(t) ? 'reopen' : 'done'}" data-id="${t.id}"
+                  aria-label="${finished(t) ? 'Rouvrir la tâche' : 'Valider la tâche'}">${t.status === 'skipped' ? '–' : ICONS.check}</button>`}
           <div class="task-title" data-act="toggle" data-id="${t.id}">
             <strong>${i + 1}. ${esc(t.title)}</strong>
             <span class="task-meta">
@@ -469,7 +471,7 @@
           <span class="timer" data-timer="${t.id}" title="Temps passé / estimé"></span>
           <div class="task-actions">
             ${primary}${validate}
-            <button class="btn icon ghost" data-act="menu" data-id="${t.id}" aria-label="Plus d'actions">${ICONS.more}</button>
+            ${closed ? '' : `<button class="btn icon ghost" data-act="menu" data-id="${t.id}" aria-label="Plus d'actions">${ICONS.more}</button>`}
             <button class="btn icon ghost" data-act="toggle" data-id="${t.id}" aria-label="${open ? 'Replier' : 'Déplier'}">${ICONS.chev}</button>
             ${state.menuFor === t.id ? `<div class="menu">
               <button data-act="edit-task" data-id="${t.id}">Modifier la tâche</button>
@@ -1211,7 +1213,7 @@
   document.addEventListener('paste', (e) => {
     const card = e.target.closest?.('[data-task-id]');
     const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
-    if (!card || !files.length || e.target.closest('.modal')) return;
+    if (!card || !files.length || e.target.closest('.modal') || state.delivery?.status === 'done') return;
     e.preventDefault();
     uploadFiles('task', Number(card.dataset.taskId), files).catch(() => {});
   });

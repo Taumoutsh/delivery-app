@@ -3,6 +3,15 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.7.0 — 2026-10-20
+
+- Une livraison clôturée est en **lecture seule** : plus de démarrage ni de validation de tâche, de
+  modification, d'ajout ou de retrait de tâche, de commentaire ou de capture, ni de suppression de
+  la livraison. On peut toujours la consulter, copier les commandes, lancer les programmes et
+  exporter les rapports. Le bouton « Rouvrir » la rend de nouveau modifiable.
+- Clôturer une livraison met en pause les chronos encore en marche.
+- Le serveur applique aussi la règle (réponse 409), pas seulement l'interface.
+
 ## 1.6.0 — 2026-10-20
 
 - Nom de l'application modifiable : cliquer sur le titre en haut de la barre latérale. Il est repris
