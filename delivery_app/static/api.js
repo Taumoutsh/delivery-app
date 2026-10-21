@@ -29,6 +29,9 @@
     deleteTask: (id) => del(`/api/tasks/${id}`),
     reorderTasks: (ids) => post('/api/tasks/reorder', { ids }),
 
+    getStorage: () => get('/api/storage'),
+    cleanupStorage: (deleteBackups) => post('/api/storage/cleanup', { delete_backups: deleteBackups }),
+
     listDeliveries: () => get('/api/deliveries'),
     createDelivery: (data) => post('/api/deliveries', data),
     getDelivery: (id) => get(`/api/deliveries/${id}`),

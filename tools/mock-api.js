@@ -19,6 +19,24 @@
     lines.forEach((l, i) => { g.fillStyle = i === lines.length - 1 ? color : '#c9d6df'; g.fillText(l, 18, 62 + i * 24); });
     return c.toDataURL('image/png');
   }
+  // Demo storage figures (the real ones come from the database).
+  let storageCleaned = false;
+  let storageBackups = [{ name: 'delivery.db.v4-20261020-101500.bak', bytes: 41_200_000, modified: '2026-10-20T10:15:00Z' }];
+  const demoStorage = () => ({
+    file_bytes: storageCleaned ? 96_400_000 : 187_300_000,
+    journal_bytes: storageCleaned ? 0 : 23_100_000,
+    content: [
+      { label: 'Images et vidéos des tâches', count: storageCleaned ? 9 : 12, bytes: storageCleaned ? 88_100_000 : 131_900_000 },
+      { label: 'Captures des livraisons', count: 14, bytes: 7_600_000 },
+      { label: 'Livraisons (3) : tâches et commentaires', count: 31, bytes: 182_000 },
+      { label: 'Modèle de tâches', count: 7, bytes: 9_400 },
+    ],
+    reclaimable: storageCleaned
+      ? { unused_media: { count: 0, bytes: 0 }, orphans: { count: 0, bytes: 0 }, free_bytes: 0, journal_bytes: 0 }
+      : { unused_media: { count: 3, bytes: 43_800_000 }, orphans: { count: 0, bytes: 0 }, free_bytes: 47_200_000, journal_bytes: 23_100_000 },
+    backups: storageBackups,
+  });
+
   const media = (filename, url, mime = 'image/png') => ({ id: `m${nextId()}`, filename, mime, url });
 
   const settings = {
@@ -162,6 +180,16 @@
 
   const api = {
     getSettings: () => ok(clone(settings)),
+    getStorage: () => ok(demoStorage()),
+    cleanupStorage: (deleteBackups) => {
+      const before = demoStorage();
+      storageCleaned = true;
+      if (deleteBackups) storageBackups = [];
+      const after = demoStorage();
+      const saved = before.file_bytes + before.journal_bytes - after.file_bytes - after.journal_bytes
+        + (deleteBackups ? before.backups.reduce((a, b) => a + b.bytes, 0) : 0);
+      return ok({ ...after, result: { media: 3, rows: 0, backups: deleteBackups ? before.backups.length : 0, saved_bytes: saved } });
+    },
     saveSettings: (data) => {
       if (data.default_variables) settings.default_variables = { ...data.default_variables };
       if (data.app_title !== undefined) settings.app_title = String(data.app_title).trim().slice(0, 60) || 'Checklist Livraison';

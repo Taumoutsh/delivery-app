@@ -38,6 +38,7 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E27 | Variables par défaut pouvant utiliser d'autres variables | ✅ v1.9 (§2.1) |
 | E28 | Notes : gras, italique, souligné, barré, listes à puces et numérotées | ✅ v1.10 (§2.3 bis) |
 | E29 | Listes des notes à plusieurs niveaux (Tab) | ✅ v1.11 (§2.3 bis) |
+| E30 | Faire le ménage dans la base (fichiers et données inutilisés), la garder compacte | ✅ v1.12 (§2.10) |
 
 ## 2. Concepts
 
@@ -177,7 +178,7 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
   est envoyé tout de suite (`POST /api/media`) et rattaché à l'enregistrement de la tâche.
 - Fichiers **immuables et partagés** : une livraison créée depuis le modèle référence les mêmes
   fichiers (pas de duplication). Retirer un fichier du modèle ne touche pas aux livraisons.
-  Au démarrage, les fichiers référencés par aucun élément depuis plus d'un jour sont supprimés.
+  Au démarrage, les fichiers référencés par aucun élément depuis plus d'un jour sont supprimés (§2.10).
 - Captures de livraison (preuves prises pendant la livraison) : distinctes, dans `images`, ajoutées
   par bouton ou Ctrl+V dans la tâche. « → modèle » (au survol) ajoute une capture à l'élément
   « Images et vidéos » de la tâche modèle d'origine (créé s'il n'existe pas).
@@ -217,6 +218,29 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
 - **Version** : `delivery_app.__version__` (source unique, voir §7), renvoyée par
   `GET /api/settings` (`app_version`, avec `schema_version`), affichée en bas de la barre latérale,
   dans la fenêtre « Application », dans les rapports et au démarrage du serveur (`--version`).
+
+### 2.10 Stockage et ménage (v1.12)
+
+Ce qui fait grossir la base n'est pas le texte des tâches (quelques Ko) mais les fichiers (images,
+vidéos) et le fonctionnement de SQLite : une suppression libère des pages **dans** le fichier sans le
+réduire, et le journal WAL garde la taille de la plus grosse écriture. Les suppressions sont
+réelles : une tâche retirée du modèle ou d'une livraison n'est pas conservée (les tâches d'une
+livraison sont la copie figée du modèle à sa création et font partie de son historique).
+
+- Fenêtre « Application » → **Stockage** (`GET /api/storage`) : taille de la base et du journal,
+  répartition (images et vidéos des tâches, captures des livraisons, texte des livraisons, modèle),
+  ce que le ménage peut libérer, sauvegardes `.bak` des mises à jour de format.
+- **Faire le ménage** (`POST /api/storage/cleanup`, `{"delete_backups": bool}`) :
+  1. supprime les fichiers « Images et vidéos » référencés par aucun élément (modèle ou livraison),
+     sauf ceux envoyés depuis moins de 10 minutes (un éditeur peut être ouvert) ;
+  2. supprime les lignes orphelines (commentaires, captures, tâches dont le parent n'existe plus)
+     et la table historique `template_images` (vidée par la migration v5) ;
+  3. compacte le fichier (`wal_checkpoint(TRUNCATE)` + `VACUUM`) ;
+  4. sur demande, supprime les sauvegardes `.bak` faites avant les mises à jour de format.
+  Les livraisons, leur historique et le modèle ne sont jamais modifiés.
+- **Automatique** : au démarrage, fichiers inutilisés depuis plus d'un jour et orphelins supprimés ;
+  compactage si l'espace libre dépasse 25 % du fichier et 10 Mo (message « Base compactée »).
+  `PRAGMA journal_size_limit` (8 Mo) empêche le journal de rester gros après un envoi de vidéo.
 
 ### 2.9 Progression
 
@@ -332,6 +356,8 @@ Toute requête qui modifie quelque chose doit porter `X-Checklist: 1` (§2.4).
 | Méthode | Route | Rôle |
 |---------|-------|------|
 | GET/PUT | `/api/settings` | `default_variables`, `app_title` (PUT partiel : seules les clés envoyées changent) ; GET ajoute `app_version`, `schema_version` |
+| GET | `/api/storage` | tailles, contenu, espace récupérable, sauvegardes (§2.10) |
+| POST | `/api/storage/cleanup` | ménage + compactage ; `delete_backups` ; renvoie le nouvel état et `result` |
 | GET/POST | `/api/tasks` | modèle : liste / ajout (`{title, description, estimated_minutes, blocks}`) |
 | PUT/DELETE | `/api/tasks/{id}` | modèle : modifier / supprimer |
 | POST | `/api/tasks/reorder` | `{ids:[…]}` |
@@ -424,3 +450,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.9.5** — Commentaire en cours de saisie publié à la validation de la tâche.
 - **v1.10** — Mise en forme des notes : gras, italique, souligné, barré, listes (E28). Pas de changement de schéma.
 - **v1.11** — Listes à plusieurs niveaux dans les notes (Tab / Maj+Tab).
+- **v1.12** — Stockage : état de la base, « Faire le ménage », compactage automatique, journal limité (E30).

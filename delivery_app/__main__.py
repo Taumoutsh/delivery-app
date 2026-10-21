@@ -50,6 +50,8 @@ def main():
         raise SystemExit(str(exc))
     if db.backup_path:
         print(f"Base mise à jour ; sauvegarde de l'ancienne : {db.backup_path}")
+    if db.compacted_bytes:
+        print(f"Base compactée : {db.compacted_bytes / 1024 / 1024:.1f} Mo libérés.")
     try:
         server = make_server(db, args.host, args.port, allow_launch=not args.no_launch)
     except OSError as exc:

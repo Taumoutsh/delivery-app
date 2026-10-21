@@ -244,6 +244,13 @@ DEFAULT_APP_TITLE = "Checklist Livraison"
 
 # Media files not referenced by any block are deleted after this delay (abandoned uploads).
 MEDIA_GRACE_DAYS = 1
+# On "Faire le ménage", only files uploaded in the last minutes are spared (an editor still open).
+CLEANUP_GRACE_SECONDS = 600
+# At startup the file is compacted (VACUUM) when at least this share of it, and this many bytes, is
+# empty space left by deletions.
+AUTO_COMPACT_RATIO = 0.25
+AUTO_COMPACT_MIN_BYTES = 10 * 1024 * 1024
+JOURNAL_SIZE_LIMIT = 8 * 1024 * 1024
 
 
 def now_iso():
@@ -282,10 +289,14 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")
+        # Without a limit the journal keeps the size of the biggest write (a 200 MB video…) for good.
+        self.conn.execute(f"PRAGMA journal_size_limit = {JOURNAL_SIZE_LIMIT}")
         self.backup_path = None
         try:
             self._migrate()
             self.collect_media()
+            self._remove_orphans()
+            self.compacted_bytes = self._auto_compact()
         except Exception:
             self.conn.close()
             raise
@@ -693,19 +704,132 @@ class Database:
                     b["files"] = [info[i] for i in b["files"] if i in info]
         return tasks
 
-    def collect_media(self):
+    def _used_media(self):
+        used = set()
+        for table in ("template_tasks", "delivery_tasks"):
+            for (raw,) in self.conn.execute(f"SELECT blocks FROM {table}").fetchall():
+                used.update(blockreg.media_ids(blockreg.normalize(json.loads(raw or "[]"))))
+        return used
+
+    def _unused_media(self, grace_seconds):
+        """[(id, bytes)] of media no block references, older than the grace delay."""
+        used = self._used_media()
+        cutoff = datetime.now(timezone.utc).timestamp() - grace_seconds
+        return [(r["id"], r["bytes"]) for r in self._all("SELECT id, created_at, length(data) AS bytes FROM media")
+                if r["id"] not in used and parse_iso(r["created_at"]).timestamp() < cutoff]
+
+    def collect_media(self, grace_seconds=MEDIA_GRACE_DAYS * 86400):
         """Delete media no block references any more (abandoned uploads, removed files)."""
         with self._lock, self.conn:
-            used = set()
-            for table in ("template_tasks", "delivery_tasks"):
-                for (raw,) in self.conn.execute(f"SELECT blocks FROM {table}").fetchall():
-                    used.update(blockreg.media_ids(blockreg.normalize(json.loads(raw or "[]"))))
-            cutoff = datetime.now(timezone.utc).timestamp() - MEDIA_GRACE_DAYS * 86400
-            stale = [r["id"] for r in self._all("SELECT id, created_at FROM media")
-                     if r["id"] not in used and parse_iso(r["created_at"]).timestamp() < cutoff]
-            for media_id in stale:
+            stale = self._unused_media(grace_seconds)
+            for media_id, _ in stale:
                 self.conn.execute("DELETE FROM media WHERE id=?", (media_id,))
             return len(stale)
+
+    # Rows whose owner is gone (left by an old version or a database edited without foreign keys),
+    # and files of the pre-v5 format that the v5 migration already moved into "media".
+    ORPHANS = {
+        "delivery_tasks": "delivery_id NOT IN (SELECT id FROM deliveries)",
+        "comments": "delivery_task_id NOT IN (SELECT id FROM delivery_tasks)",
+        "images": "delivery_task_id NOT IN (SELECT id FROM delivery_tasks)",
+        "template_images": "1",
+    }
+
+    def _orphans(self):
+        out = {}
+        for table, where in self.ORPHANS.items():
+            data = "length(data)" if table in ("images", "template_images") else "0"
+            n, size = self.conn.execute(f"SELECT COUNT(*), COALESCE(SUM({data}), 0) FROM {table} WHERE {where}").fetchone()
+            out[table] = (n, size)
+        return out
+
+    def _remove_orphans(self):
+        with self._lock, self.conn:
+            # Order matters: tasks first, so their comments and captures become orphans too.
+            return sum(self.conn.execute(f"DELETE FROM {t} WHERE {w}").rowcount for t, w in self.ORPHANS.items())
+
+    # -- storage ----------------------------------------------------------
+
+    def _files(self):
+        if self.path == ":memory:":
+            return 0, 0, []
+        db = Path(self.path)
+        size = lambda f: f.stat().st_size if f.exists() else 0  # noqa: E731
+        backups = [{"name": f.name, "bytes": size(f), "modified": datetime.fromtimestamp(
+                    f.stat().st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+                   for f in sorted(db.parent.glob(f"{db.name}.v*.bak"))]
+        return size(db), size(db.with_name(db.name + "-wal")), backups
+
+    def storage(self):
+        """What the database holds and what "Faire le ménage" can give back (sizes in bytes)."""
+        with self._lock:
+            one = lambda sql: self.conn.execute(sql).fetchone()  # noqa: E731
+            page_size = one("PRAGMA page_size")[0]
+            free = one("PRAGMA freelist_count")[0] * page_size
+            file_bytes, wal_bytes, backups = self._files()
+            media = one("SELECT COUNT(*), COALESCE(SUM(length(data)), 0) FROM media")
+            captures = one("SELECT COUNT(*), COALESCE(SUM(length(data)), 0) FROM images")
+            text = lambda table, cols: one(  # noqa: E731
+                f"SELECT COUNT(*), COALESCE(SUM({' + '.join(f'length({c})' for c in cols)}), 0) FROM {table}")
+            deliveries = one("SELECT COUNT(*) FROM deliveries")[0]
+            d_tasks = text("delivery_tasks", ("title", "description", "blocks"))
+            comments = text("comments", ("body",))
+            t_tasks = text("template_tasks", ("title", "description", "blocks"))
+            unused = self._unused_media(CLEANUP_GRACE_SECONDS)
+            orphans = self._orphans()
+            return {
+                "file_bytes": file_bytes, "journal_bytes": wal_bytes,
+                "content": [
+                    {"label": "Images et vidéos des tâches", "count": media[0], "bytes": media[1]},
+                    {"label": "Captures des livraisons", "count": captures[0], "bytes": captures[1]},
+                    {"label": f"Livraisons ({deliveries}) : tâches et commentaires",
+                     "count": d_tasks[0] + comments[0], "bytes": d_tasks[1] + comments[1]},
+                    {"label": "Modèle de tâches", "count": t_tasks[0], "bytes": t_tasks[1]},
+                ],
+                "reclaimable": {
+                    "unused_media": {"count": len(unused), "bytes": sum(b for _, b in unused)},
+                    "orphans": {"count": sum(n for n, _ in orphans.values()), "bytes": sum(b for _, b in orphans.values())},
+                    "free_bytes": free,
+                    "journal_bytes": wal_bytes,
+                },
+                "backups": backups,
+            }
+
+    def _auto_compact(self):
+        """Compact the file at startup when deletions left a lot of empty space; returns the bytes saved."""
+        with self._lock:
+            page_size = self.conn.execute("PRAGMA page_size").fetchone()[0]
+            pages = self.conn.execute("PRAGMA page_count").fetchone()[0]
+            free = self.conn.execute("PRAGMA freelist_count").fetchone()[0]
+            if free * page_size < AUTO_COMPACT_MIN_BYTES or free < pages * AUTO_COMPACT_RATIO:
+                return 0
+            before = sum(self._files()[:2])
+            self._compact()
+            return max(0, before - sum(self._files()[:2]))
+
+    def _compact(self):
+        self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        self.conn.execute("VACUUM")  # rewrites the file without its free pages
+        self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    def cleanup(self, delete_backups=False):
+        """Delete unused files and orphan rows, then give the space back to the disk (VACUUM)."""
+        with self._lock:
+            before = sum(self._files()[:2])
+            removed_media = self.collect_media(CLEANUP_GRACE_SECONDS)
+            removed_rows = self._remove_orphans()
+            self._compact()
+            removed_backups = backup_bytes = 0
+            if delete_backups and self.path != ":memory:":
+                for b in self._files()[2]:
+                    Path(self.path).with_name(b["name"]).unlink()
+                    removed_backups += 1
+                    backup_bytes += b["bytes"]
+            after = sum(self._files()[:2])
+            report = self.storage()
+            report["result"] = {"media": removed_media, "rows": removed_rows, "backups": removed_backups,
+                                "saved_bytes": max(0, before - after) + backup_bytes}
+            return report
 
     # -- programs ---------------------------------------------------------
 

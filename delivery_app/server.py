@@ -63,6 +63,16 @@ def put_settings(h):
     return h.db.save_settings(h.json())
 
 
+@route("GET", "/api/storage")
+def get_storage(h):
+    return h.db.storage()
+
+
+@route("POST", "/api/storage/cleanup")
+def cleanup_storage(h):
+    return h.db.cleanup(delete_backups=bool(h.json().get("delete_backups")))
+
+
 @route("GET", "/api/tasks")
 def list_tasks(h):
     return h.db.list_template_tasks()

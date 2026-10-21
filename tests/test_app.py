@@ -5,6 +5,7 @@ Run: python -m unittest discover tests
 
 import io
 import json
+import os
 import random
 import re
 import sqlite3
@@ -17,6 +18,7 @@ import urllib.error
 import urllib.request
 import zipfile
 import zlib
+from datetime import datetime, timezone
 from pathlib import Path
 
 from unittest import mock
@@ -140,6 +142,15 @@ class ApiTest(unittest.TestCase):
         self.assertIn(b"/F3 9.50 Tf", content)  # italic
         self.assertIn(b"(\x95) Tj", content)  # bullet (cp1252)
         self.assertNotIn(b"**", content)
+
+    def test_storage_api(self):
+        status, report = self.call("GET", "/api/storage")
+        self.assertEqual(status, 200)
+        self.assertEqual(set(report), {"file_bytes", "journal_bytes", "content", "reclaimable", "backups"})
+        self.assertEqual(self.call("POST", "/api/storage/cleanup", {}, app=False)[0], 403)
+        status, report = self.call("POST", "/api/storage/cleanup", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(report["reclaimable"]["free_bytes"], 0)
 
     def test_template_changes_do_not_rewrite_history(self):
         _, d = self.call("POST", "/api/deliveries", {"version": "1.0.0"})
@@ -407,6 +418,73 @@ def pdf_content(data):
     """Decompressed content streams of a PDF (where its text lives)."""
     return b"".join(zlib.decompress(m.group(1)) for m in
                     re.finditer(rb"<< /Filter /FlateDecode /Length \d+ >>\nstream\n(.*?)\nendstream", data, re.S))
+
+
+class StorageTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "delivery.db"
+        self.db = Database(self.path)
+
+    def tearDown(self):
+        self.db.conn.close()
+        self.tmp.cleanup()
+
+    def add_media(self, size, age_seconds):
+        created = datetime.fromtimestamp(time.time() - age_seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self.db.conn:
+            return self.db.conn.execute("INSERT INTO media (filename, mime, size, data, created_at) VALUES (?,?,?,?,?)",
+                                        ("v.mp4", "video/mp4", size, os.urandom(size), created)).lastrowid
+
+    def test_cleanup_gives_space_back_and_keeps_what_is_used(self):
+        db = self.db
+        tasks = db.list_template_tasks()
+        used = self.add_media(300_000, 7200)
+        db.update_template_task(tasks[0]["id"], {"blocks": tasks[0]["blocks"] + [{"type": "media", "files": [used]}]})
+        d = db.create_delivery({"version": "1.0.0"})
+        unused_old = self.add_media(2_000_000, 7200)  # removed from its task long ago
+        fresh = self.add_media(50_000, 0)             # just uploaded, editor maybe still open
+        # A comment whose task is gone (left by a database edited without foreign keys).
+        db.conn.execute("PRAGMA foreign_keys = OFF")
+        with db.conn:
+            db.conn.execute("INSERT INTO comments (delivery_task_id, body, created_at) VALUES (999999, 'x', '2026-01-01T00:00:00Z')")
+        db.conn.execute("PRAGMA foreign_keys = ON")
+        # Deleting a big delivery capture leaves free pages: the file does not shrink by itself.
+        with db.conn:
+            db.conn.execute("INSERT INTO images (delivery_task_id, filename, mime, size, data, created_at) VALUES (?,?,?,?,?,?)",
+                            (d["tasks"][0]["id"], "c.png", "image/png", 3_000_000, os.urandom(3_000_000), "2026-01-01T00:00:00Z"))
+            db.conn.execute("DELETE FROM images")
+        backup = self.path.with_name("delivery.db.v4-20260101-000000.bak")
+        backup.write_bytes(b"x" * 1000)
+
+        report = db.storage()
+        self.assertEqual(report["reclaimable"]["unused_media"]["count"], 1)
+        self.assertGreater(report["reclaimable"]["unused_media"]["bytes"], 1_900_000)
+        self.assertEqual(report["reclaimable"]["orphans"]["count"], 1)
+        self.assertGreater(report["reclaimable"]["free_bytes"], 2_500_000)
+        self.assertEqual([b["name"] for b in report["backups"]], [backup.name])
+
+        size_before = self.path.stat().st_size + report["journal_bytes"]
+        result = db.cleanup()
+        self.assertEqual((result["result"]["media"], result["result"]["rows"], result["result"]["backups"]), (1, 1, 0))
+        self.assertLess(self.path.stat().st_size + result["journal_bytes"], size_before - 4_000_000)
+        ids = {r[0] for r in db.conn.execute("SELECT id FROM media")}
+        self.assertEqual(ids, {used, fresh})
+        self.assertEqual(db.get_delivery(d["id"])["tasks"][0]["blocks"], db.list_template_tasks()[0]["blocks"])
+        self.assertTrue(backup.exists())
+        self.assertEqual(result["reclaimable"]["free_bytes"], 0)
+
+        # Big deletions are compacted at the next start without any click.
+        self.add_media(12_000_000, 3 * 86400)
+        db.conn.close()
+        self.db = db = Database(self.path)
+        self.assertGreater(db.compacted_bytes, 11_000_000)
+        self.assertEqual(db.storage()["reclaimable"]["free_bytes"], 0)
+
+        result = db.cleanup(delete_backups=True)
+        self.assertEqual(result["result"]["backups"], 1)
+        self.assertFalse(backup.exists())
+        self.assertEqual(result["backups"], [])
 
 
 class WritersTest(unittest.TestCase):
