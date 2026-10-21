@@ -374,6 +374,7 @@ class Database:
             return {
                 "default_variables": json.loads(rows.get("default_variables") or "{}"),
                 "app_title": rows.get("app_title") or DEFAULT_APP_TITLE,
+                "auto_timer": rows.get("auto_timer", "1") == "1",
                 "app_version": __version__,
                 "schema_version": int(rows.get("schema_version") or SCHEMA_VERSION),
             }
@@ -388,7 +389,14 @@ class Database:
             if "app_title" in data:
                 title = " ".join(str(data["app_title"] or "").split())[:60] or DEFAULT_APP_TITLE
                 self.conn.execute("INSERT OR REPLACE INTO settings VALUES ('app_title', ?)", (title,))
+            if "auto_timer" in data:
+                self.conn.execute("INSERT OR REPLACE INTO settings VALUES ('auto_timer', ?)",
+                                  ("1" if data["auto_timer"] else "0",))
         return self.get_settings()
+
+    def _auto_timer(self):
+        row = self.conn.execute("SELECT value FROM settings WHERE key='auto_timer'").fetchone()
+        return not row or row[0] == "1"
 
     def app_title(self):
         return self.get_settings()["app_title"]
@@ -461,6 +469,8 @@ class Database:
                     " blocks, estimated_minutes) VALUES (?,?,?,?,?,?,?)",
                     (delivery_id, t["id"], t["position"], t["title"], t["description"], t["blocks"],
                      t["estimated_minutes"]))
+            if self._auto_timer():  # the first task's timer starts with the delivery
+                self._start_next(delivery_id, None, ts)
         return self.get_delivery(delivery_id)
 
     def get_delivery(self, delivery_id):
@@ -605,7 +615,27 @@ class Database:
                 "UPDATE delivery_tasks SET status=?, elapsed_seconds=?, running_since=?, started_at=?,"
                 " completed_at=? WHERE id=?",
                 (t["status"], t["elapsed_seconds"], t["running_since"], t["started_at"], t["completed_at"], task_id))
+            if action in ("done", "skip") and self._auto_timer():
+                self._start_next(t["delivery_id"], t, ts)
         return self.get_delivery(t["delivery_id"])
+
+    def _start_next(self, delivery_id, after, ts):
+        """Chain the timers: start the next task to do (after `after` in the list order, then from the
+        top), unless a timer is already running in this delivery."""
+        tasks = self._all("SELECT id, position, status FROM delivery_tasks WHERE delivery_id=? ORDER BY position, id",
+                          (delivery_id,))
+        if any(x["status"] == "running" for x in tasks):
+            return None
+        pending = [x for x in tasks if x["status"] in ("todo", "paused")]
+        if after is not None:
+            index = next(i for i, x in enumerate(tasks) if x["id"] == after["id"])
+            later = {x["id"] for x in tasks[index + 1:]}
+            pending = [x for x in pending if x["id"] in later] + [x for x in pending if x["id"] not in later]
+        if not pending:
+            return None
+        self.conn.execute("UPDATE delivery_tasks SET status='running', running_since=?,"
+                          " started_at=COALESCE(started_at, ?) WHERE id=?", (ts, ts, pending[0]["id"]))
+        return pending[0]["id"]
 
     # -- comments & images ---------------------------------------------
 

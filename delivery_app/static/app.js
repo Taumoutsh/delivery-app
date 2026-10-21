@@ -31,7 +31,7 @@
     deliveries: [],
     delivery: null,
     templateTasks: [],
-    settings: { default_variables: {}, app_title: 'Checklist Livraison', app_version: '', schema_version: '' },
+    settings: { default_variables: {}, app_title: 'Checklist Livraison', auto_timer: true, app_version: '', schema_version: '' },
     view: 'empty', // empty | delivery | template
     expanded: new Set(),  // finished tasks the user re-opened
     collapsed: new Set(), // unfinished tasks the user folded
@@ -1354,15 +1354,19 @@
           <div class="field"><label for="app-title">Nom de l'application</label>
             <input type="text" id="app-title" name="app_title" maxlength="60" required value="${esc(st.app_title)}">
             <span class="hint">Affiché dans la barre latérale, l'onglet du navigateur et les rapports PDF/Word.</span></div>
+          <label class="check field-check"><input type="checkbox" name="auto_timer"${st.auto_timer ? ' checked' : ''}>
+            <span><b>Enchaîner les chronos</b><span class="hint">Le chrono de la première tâche démarre à la création de la
+            livraison, puis celui de la tâche suivante dès qu'une tâche est validée ou marquée non applicable
+            (sauf si un autre chrono tourne déjà).</span></span></label>
           <dl class="about">
             <dt>Version</dt><dd class="num">${esc(st.app_version)}</dd>
             <dt>Format de la base</dt><dd class="num">v${esc(st.schema_version)}</dd>
           </dl>
           <section class="storage" data-storage><h3>Stockage</h3><p class="muted">Calcul de la taille…</p></section>`,
         async onSubmit(form) {
-          applySettings(await API.saveSettings({ app_title: form.app_title.value }));
+          applySettings(await API.saveSettings({ app_title: form.app_title.value, auto_timer: form.auto_timer.checked }));
           render();
-          toast('Nom de l\'application enregistré');
+          toast('Réglages enregistrés');
         },
       });
       const section = document.querySelector('[data-storage]');
@@ -1403,10 +1407,17 @@
       const action = el.dataset.action;
       // Finishing a task collapses it: publish the comment being typed first so it is not left behind.
       if (action === 'done' || action === 'skip') await postComment(id);
+      const wasRunning = new Set(state.delivery.tasks.filter((t) => t.status === 'running').map((t) => t.id));
       const d = await run(API.taskAction(id, action));
       if (action === 'reopen') state.expanded.delete(id);
       if (action === 'done' || action === 'skip') state.expanded.delete(id);
+      // A timer chained by the server: open that task and bring it into view.
+      const next = d.tasks.find((t) => t.status === 'running' && !wasRunning.has(t.id));
+      if (next && next.id !== id) state.collapsed.delete(next.id);
       await setDelivery(d);
+      if (next && next.id !== id) {
+        document.querySelector(`article[data-task-id="${next.id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
     },
     'blk-copy': (el) => {
       const { block } = blockOf(el);

@@ -41,7 +41,15 @@
 
   const settings = {
     default_variables: { prev_version: '', registry: 'registry.local', env: 'recette' },
-    app_title: 'Checklist Livraison', app_version: '1.6.0 (démo)', schema_version: 5,
+    app_title: 'Checklist Livraison', auto_timer: true, app_version: 'démo', schema_version: 5,
+  };
+  // Mirror of Database._start_next: chain the timers unless one is already running.
+  const startNext = (d, after, now) => {
+    if (!settings.auto_timer || d.tasks.some((x) => x.status === 'running')) return;
+    const idx = after ? d.tasks.indexOf(after) : -1;
+    const pending = d.tasks.filter((x) => x.status === 'todo' || x.status === 'paused');
+    const next = pending.find((x) => d.tasks.indexOf(x) > idx) || pending[0];
+    if (next) Object.assign(next, { status: 'running', running_since: now, started_at: next.started_at || now });
   };
 
   // Block helpers (same shapes as blocks.js).
@@ -192,6 +200,7 @@
     },
     saveSettings: (data) => {
       if (data.default_variables) settings.default_variables = { ...data.default_variables };
+      if (data.auto_timer !== undefined) settings.auto_timer = !!data.auto_timer;
       if (data.app_title !== undefined) settings.app_title = String(data.app_title).trim().slice(0, 60) || 'Checklist Livraison';
       return ok(clone(settings));
     },
@@ -215,6 +224,7 @@
         variables: { ...data.variables }, created_at: iso(new Date()), completed_at: null,
       };
       d.tasks = template.map((t) => fromTemplate(t));
+      startNext(d, null, d.created_at);
       deliveries.push(d);
       return ok(full(d));
     },
@@ -257,6 +267,7 @@
       else if (action === 'done' || action === 'skip') Object.assign(t, { status: action === 'done' ? 'done' : 'skipped', running_since: null, elapsed_seconds: el, completed_at: now });
       else if (action === 'reopen' && ['done', 'skipped'].includes(t.status)) Object.assign(t, { status: t.elapsed_seconds ? 'paused' : 'todo', completed_at: null });
       else if (action === 'reset') Object.assign(t, { status: 'todo', running_since: null, elapsed_seconds: 0, started_at: null, completed_at: null });
+      if (action === 'done' || action === 'skip') startNext(d, t, now);
       return ok(full(d));
     },
     addComment: (id, body) => {

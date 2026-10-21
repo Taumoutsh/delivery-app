@@ -39,6 +39,7 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E28 | Notes : gras, italique, souligné, barré, listes à puces et numérotées | ✅ v1.10 (§2.3 bis) |
 | E29 | Listes des notes à plusieurs niveaux (Tab) | ✅ v1.11 (§2.3 bis) |
 | E30 | Faire le ménage dans la base (fichiers et données inutilisés), la garder compacte | ✅ v1.12 (§2.10) |
+| E31 | Chrono lancé automatiquement : première tâche à la création, puis tâche suivante à la fin d'une tâche | ✅ v1.13 (§2.6) |
 
 ## 2. Concepts
 
@@ -194,6 +195,12 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
 - **Remettre à zéro** : statut `todo`, chrono à 0.
 - Plusieurs tâches peuvent tourner en parallèle. Le temps est calculé côté serveur (UTC),
   l'interface rafraîchit l'affichage chaque seconde. Dépassement de l'estimé affiché en orange.
+- **Chronos enchaînés** (v1.13, réglage `auto_timer`, activé par défaut, case « Enchaîner les
+  chronos » de la fenêtre « Application ») : à la création d'une livraison, la première tâche
+  démarre ; quand une tâche est validée ou marquée non applicable, la tâche suivante à faire
+  (`todo` ou `paused`, dans l'ordre de la liste après elle, puis depuis le début) démarre, sauf si
+  un autre chrono tourne déjà dans la livraison. Côté serveur (`Database._start_next`), dans la même
+  transaction ; l'interface déplie la tâche démarrée et la fait défiler à l'écran.
 
 ### 2.7 Livraison clôturée (lecture seule)
 
@@ -355,7 +362,7 @@ Toute requête qui modifie quelque chose doit porter `X-Checklist: 1` (§2.4).
 
 | Méthode | Route | Rôle |
 |---------|-------|------|
-| GET/PUT | `/api/settings` | `default_variables`, `app_title` (PUT partiel : seules les clés envoyées changent) ; GET ajoute `app_version`, `schema_version` |
+| GET/PUT | `/api/settings` | `default_variables`, `app_title`, `auto_timer` (PUT partiel : seules les clés envoyées changent) ; GET ajoute `app_version`, `schema_version` |
 | GET | `/api/storage` | tailles, contenu, espace récupérable, sauvegardes (§2.10) |
 | POST | `/api/storage/cleanup` | ménage + compactage ; `delete_backups` ; renvoie le nouvel état et `result` |
 | GET/POST | `/api/tasks` | modèle : liste / ajout (`{title, description, estimated_minutes, blocks}`) |
@@ -451,3 +458,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.10** — Mise en forme des notes : gras, italique, souligné, barré, listes (E28). Pas de changement de schéma.
 - **v1.11** — Listes à plusieurs niveaux dans les notes (Tab / Maj+Tab).
 - **v1.12** — Stockage : état de la base, « Faire le ménage », compactage automatique, journal limité (E30).
+- **v1.13** — Chronos enchaînés (E31), désactivables dans « Application ».
