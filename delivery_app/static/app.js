@@ -997,6 +997,38 @@
   }
 
   // blockId = one table block; null = every table of the task, each preceded by its title.
+  // Full HTML document as Word expects it on the clipboard (a bare fragment may be pasted as text).
+  const wordHtml = (body) => `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">
+<head><meta charset="utf-8"></head><body>${body}</body></html>`;
+
+  // Puts both HTML and plain text on the clipboard through a native copy event: the most reliable
+  // route for Word (the async Clipboard API rewrites the HTML, and some browsers lack it). A rendered
+  // copy is selected too, for browsers that only fire the event when something is selected.
+  function copyRich(html, text) {
+    let written = false;
+    const onCopy = (e) => {
+      e.clipboardData.setData('text/html', html);
+      e.clipboardData.setData('text/plain', text);
+      e.preventDefault();
+      written = true;
+    };
+    const holder = document.createElement('div');
+    holder.style.cssText = 'position:fixed;left:-10000px;top:0;background:#fff;color:#000;';
+    holder.innerHTML = html;
+    document.body.appendChild(holder);
+    const range = document.createRange();
+    range.selectNodeContents(holder);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    document.addEventListener('copy', onCopy);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    document.removeEventListener('copy', onCopy);
+    getSelection().removeAllRanges();
+    holder.remove();
+    return ok; // without the event (old browser), the selected rendered copy was copied as rich text
+  }
+
   async function copyTable(btn, task, blockId) {
     const vars = buildVariables(state.delivery);
     const tables = task.blocks.filter((b) => b.type === 'table' && (blockId === null || b.id === blockId))
@@ -1008,26 +1040,15 @@
       + tableHtmlForWord(table)).join('<p></p>');
     const text = tables.map(({ title, table }) => (withTitles && title ? `${title}\n` : '') + tableText(table)).join('\n\n');
     const label = btn.textContent;
-    let ok = false;
-    try {
-      await navigator.clipboard.write([new ClipboardItem({
-        'text/html': new Blob([html], { type: 'text/html' }),
-        'text/plain': new Blob([text], { type: 'text/plain' }),
-      })]);
-      ok = true;
-    } catch {
-      // Fallback: select a rendered copy so the browser puts rich HTML on the clipboard.
-      const holder = document.createElement('div');
-      holder.style.cssText = 'position:fixed;left:-10000px;top:0;background:#fff;color:#000;';
-      holder.innerHTML = html;
-      document.body.appendChild(holder);
-      const range = document.createRange();
-      range.selectNodeContents(holder);
-      getSelection().removeAllRanges();
-      getSelection().addRange(range);
-      try { ok = document.execCommand('copy'); } catch { ok = false; }
-      getSelection().removeAllRanges();
-      holder.remove();
+    let ok = copyRich(wordHtml(html), text);
+    if (!ok) {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/html': new Blob([wordHtml(html)], { type: 'text/html' }),
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+        })]);
+        ok = true;
+      } catch { ok = false; }
     }
     if (!ok) { toast('Copie refusée par le navigateur : utilisez « Télécharger en .docx ».', true); return; }
     btn.textContent = 'Copié ✓ — collez dans Word';

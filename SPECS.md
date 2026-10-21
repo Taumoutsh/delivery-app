@@ -386,3 +386,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.9** — Variables composées : une variable peut utiliser d'autres variables (E27). Pas de changement de schéma.
 - **v1.9.1** — Lien : adresse masquée à côté du bouton (visible au survol).
 - **v1.9.2** — Séparateurs entre les éléments d'une tâche (pointillés entre éléments du même type).
+- **v1.9.3** — « Copier pour Word » : copie par événement natif (HTML complet + texte brut), liens collés comme hyperliens.

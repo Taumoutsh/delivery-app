@@ -3,6 +3,13 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.9.3 — 2026-10-21
+
+- « Copier pour Word » : la copie passe désormais par l'événement de copie natif du navigateur, avec
+  un document HTML complet, la forme que Word reconnaît le mieux. Les liens sont collés comme de vrais
+  liens cliquables sur leur texte, au lieu de « texte (https://…) ». La copie en texte brut (Bloc-notes,
+  messagerie…) garde l'adresse entre parenthèses.
+
 ## 1.9.2 — 2026-10-21
 
 - Lisibilité : un fin séparateur sépare chaque élément d'une tâche (commande, lien, programme,
