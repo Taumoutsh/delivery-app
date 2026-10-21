@@ -40,6 +40,7 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E29 | Listes des notes à plusieurs niveaux (Tab) | ✅ v1.11 (§2.3 bis) |
 | E30 | Faire le ménage dans la base (fichiers et données inutilisés), la garder compacte | ✅ v1.12 (§2.10) |
 | E31 | Chrono lancé automatiquement : première tâche à la création, puis tâche suivante à la fin d'une tâche | ✅ v1.13 (§2.6) |
+| E32 | Vidéos hors de la base, dans un dossier `data/media` géré par l'application | ✅ v1.14 (§2.5, schéma v6) |
 
 ## 2. Concepts
 
@@ -169,7 +170,7 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
 ### 2.5 Médias (images, vidéos)
 
 - Images : PNG/JPEG (le navigateur convertit GIF, WebP, BMP… en PNG), 15 Mo maximum.
-- Vidéos : tout type `video/*` (MP4, WebM, Ogg, MOV, AVI, MKV, WMV…), 200 Mo maximum ; si le
+- Vidéos : tout type `video/*` (MP4, WebM, Ogg, MOV, AVI, MKV, WMV…), 2 Go maximum ; si le
   navigateur n'envoie pas de type (ou `application/octet-stream`), il est déduit de l'extension.
   Lecture dans la visionneuse avec avance/recul (le serveur gère les requêtes `Range`) ; un format
   que le navigateur ne sait pas lire (AVI, WMV…) est proposé en téléchargement.
@@ -177,6 +178,14 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
   acceptés.
 - Ajout dans l'éditeur : bouton, glisser-déposer sur l'élément, Ctrl+V dans l'élément. Le fichier
   est envoyé tout de suite (`POST /api/media`) et rattaché à l'enregistrement de la tâche.
+- **Stockage** (v1.14) : les images restent dans la base (petites, intégrées aux rapports) ; les
+  vidéos sont des fichiers du dossier `media/` à côté de la base (`data/media/`), nommés par
+  l'empreinte SHA-256 de leur contenu : jamais écrasés, une même vidéo envoyée deux fois n'est
+  stockée qu'une fois. L'envoi est écrit au fil de l'eau (fichier temporaire `.upload-….tmp` puis
+  renommage), sans passer en mémoire ; la lecture se fait depuis le disque, par morceaux, avec
+  `Range`. Un fichier que plus aucune ligne de `media` ne désigne est supprimé avec elle (ménage,
+  démarrage) ; un envoi interrompu depuis plus d'un jour aussi. Base en mémoire (`:memory:`) :
+  vidéos dans `data`, comme avant.
 - Fichiers **immuables et partagés** : une livraison créée depuis le modèle référence les mêmes
   fichiers (pas de duplication). Retirer un fichier du modèle ne touche pas aux livraisons.
   Au démarrage, les fichiers référencés par aucun élément depuis plus d'un jour sont supprimés (§2.10).
@@ -298,7 +307,7 @@ Choix :
   cette adresse est ajoutée aux hôtes autorisés.
 - Variables d'environnement : `DELIVERY_PORT`, `DELIVERY_HOST`, `DELIVERY_DATA`, `DELIVERY_NO_LAUNCH`.
 
-### 3.1 Schéma (version 5)
+### 3.1 Schéma (version 6)
 
 - `settings(key, value)` — `schema_version`, `default_variables` (JSON), `app_title`.
 - `template_tasks(id, position, title, description, blocks JSON, estimated_minutes, created_at,
@@ -311,7 +320,9 @@ Choix :
 - `comments(id, delivery_task_id, body, created_at)`
 - `images(id, delivery_task_id, filename, mime, size, data BLOB, created_at, reference)` — captures
   prises pendant la livraison (`reference` historique, toujours 0 depuis v5).
-- `media(id, filename, mime, size, data BLOB, created_at)` — fichiers des éléments « Images et vidéos ».
+- `media(id, filename, mime, size, data BLOB, created_at, file)` — fichiers des éléments « Images et
+  vidéos ». Images dans `data` ; vidéos (v6) dans le dossier `media/` à côté de la base, `file` = nom
+  du fichier (`<sha256>.<ext>`), `data` vide (§2.5).
 - `template_images(…)` — historique (v4), vidé par la migration v5.
 
 Horodatages en UTC ISO-8601 (`2026-10-20T15:47:40Z`). Suppressions en cascade.
@@ -334,6 +345,10 @@ Historique :
 - v4 → v5 : colonne `blocks` et table `media`. Commandes et tableaux deviennent des éléments ;
   les captures de référence (modèle et copies en livraison) deviennent un élément « Images et
   vidéos » « Captures de référence », leurs fichiers passent dans `media`.
+- v5 → v6 : colonne `media.file`. Juste après la mise à jour (et à chaque démarrage),
+  `Database._move_videos_out` écrit chaque vidéo encore dans la base dans `media/` (fichier complet
+  écrit puis renommé avant que la ligne pointe dessus), puis vide `data` ; le compactage automatique
+  rend ensuite la place. La sauvegarde `.bak` garde l'ancienne base avec ses vidéos.
 
 Pour toute évolution qui touche la base :
 
@@ -363,7 +378,7 @@ Toute requête qui modifie quelque chose doit porter `X-Checklist: 1` (§2.4).
 | Méthode | Route | Rôle |
 |---------|-------|------|
 | GET/PUT | `/api/settings` | `default_variables`, `app_title`, `auto_timer` (PUT partiel : seules les clés envoyées changent) ; GET ajoute `app_version`, `schema_version` |
-| GET | `/api/storage` | tailles, contenu, espace récupérable, sauvegardes (§2.10) |
+| GET | `/api/storage` | tailles (base, journal, dossier `media`), contenu, espace récupérable, sauvegardes (§2.10) |
 | POST | `/api/storage/cleanup` | ménage + compactage ; `delete_backups` ; renvoie le nouvel état et `result` |
 | GET/POST | `/api/tasks` | modèle : liste / ajout (`{title, description, estimated_minutes, blocks}`) |
 | PUT/DELETE | `/api/tasks/{id}` | modèle : modifier / supprimer |
@@ -459,3 +474,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.11** — Listes à plusieurs niveaux dans les notes (Tab / Maj+Tab).
 - **v1.12** — Stockage : état de la base, « Faire le ménage », compactage automatique, journal limité (E30).
 - **v1.13** — Chronos enchaînés (E31), désactivables dans « Application ».
+- **v1.14** — Vidéos dans `data/media/` (E32), envoi en flux jusqu'à 2 Go, schéma v6.

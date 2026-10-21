@@ -3,6 +3,19 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.14.0 — 2026-10-21
+
+- **Vidéos hors de la base** : elles sont rangées dans le dossier `data/media/`, à côté de la base.
+  La base reste légère, les vidéos se lisent directement depuis le disque, et la limite passe de
+  200 Mo à **2 Go** par vidéo (l'envoi n'est plus chargé en mémoire).
+- Les vidéos déjà dans la base sont déplacées automatiquement dans `data/media/` au premier
+  démarrage, puis la base est compactée. La sauvegarde `.bak` habituelle est faite avant.
+- Une même vidéo envoyée plusieurs fois n'est stockée qu'une fois ; une vidéo plus utilisée par
+  aucune tâche est supprimée par le ménage, fichier compris.
+- Les images restent dans la base (elles sont intégrées aux rapports).
+- **Sauvegarde** : copier tout le dossier `data/` (base + `media/`).
+- Format de base v6 (mise à jour automatique).
+
 ## 1.13.0 — 2026-10-21
 
 - **Chronos enchaînés** : le chrono de la première tâche démarre à la création de la livraison.

@@ -1321,7 +1321,8 @@
       r.journal_bytes && `journal de la base (${fmtBytes(r.journal_bytes)})`,
     ].filter(Boolean);
     return `<h3>Stockage</h3>
-      <div class="storage-total"><b>${fmtBytes(d.file_bytes + d.journal_bytes)}</b> pour la base${backupsBytes
+      <div class="storage-total"><b>${fmtBytes(d.file_bytes + d.journal_bytes)}</b> pour la base${d.media_folder_bytes
+        ? ` · <b>${fmtBytes(d.media_folder_bytes)}</b> de vidéos (dossier media)` : ''}${backupsBytes
         ? ` · <b>${fmtBytes(backupsBytes)}</b> de sauvegardes` : ''}</div>
       <table class="storage-table"><tbody>
         ${d.content.map((c) => `<tr><td>${esc(c.label)}</td><td class="num">${c.count}</td><td class="num">${fmtBytes(c.bytes)}</td></tr>`).join('')}

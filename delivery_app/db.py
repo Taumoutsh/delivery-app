@@ -1,8 +1,12 @@
 """SQLite storage: schema, migrations and data-access helpers."""
 
+import hashlib
+import io
 import json
+import os
 import sqlite3
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -89,13 +93,16 @@ CREATE TABLE IF NOT EXISTS images (
 
 -- Files of "media" blocks (images, videos). Immutable and shared: a delivery created from the
 -- template references the same rows, so the template can change without touching the history.
+-- Images are stored in `data`; videos (v6) are files of the media folder next to the database,
+-- named after their content (`file`, e.g. "3f…9a.mp4"), with an empty `data`.
 CREATE TABLE IF NOT EXISTS media (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     filename   TEXT NOT NULL,
     mime       TEXT NOT NULL,
     size       INTEGER NOT NULL,
     data       BLOB NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    file       TEXT NOT NULL DEFAULT ''
 );
 
 -- Legacy (v4), emptied by the v5 migration: reference screenshots now live in media blocks.
@@ -180,6 +187,12 @@ def _migrate_v5(conn):
                          (json.dumps(blockreg.normalize(blocks), ensure_ascii=False), task_id))
 
 
+def _migrate_v6(conn):
+    """v6: videos can live in the media folder (media.file). Moving the existing ones out of the
+    database is done after the upgrade by Database._move_videos_out (it needs the folder)."""
+    conn.execute("ALTER TABLE media ADD COLUMN file TEXT NOT NULL DEFAULT ''")
+
+
 # version -> step upgrading a database from (version - 1). Steps run in order, in one transaction.
 # Never edit a released step: add a new one.
 MIGRATIONS = {
@@ -187,8 +200,22 @@ MIGRATIONS = {
     3: _migrate_v3,
     4: _migrate_v4,
     5: _migrate_v5,
+    6: _migrate_v6,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
+
+
+VIDEO_SUFFIXES = {"video/mp4": ".mp4", "video/webm": ".webm", "video/ogg": ".ogv", "video/quicktime": ".mov",
+                  "video/x-msvideo": ".avi", "video/x-matroska": ".mkv", "video/x-ms-wmv": ".wmv",
+                  "video/mpeg": ".mpg", "video/3gpp": ".3gp", "video/x-m4v": ".m4v"}
+
+
+def _video_ext(filename, mime):
+    """Extension of a stored video: the original one when it is plain, else from the type."""
+    ext = Path(filename).suffix.lower()
+    if 1 < len(ext) <= 6 and ext[1:].isalnum():
+        return ext
+    return VIDEO_SUFFIXES.get(mime, ".video")
 
 
 class SchemaTooNew(Exception):
@@ -285,6 +312,8 @@ class Database:
     def __init__(self, path):
         self.path = str(path)
         self._lock = threading.RLock()
+        # Videos are files of this folder ("data/media"); an in-memory database keeps them inside.
+        self.media_dir = None if self.path == ":memory:" else Path(self.path).parent / "media"
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
@@ -294,6 +323,7 @@ class Database:
         self.backup_path = None
         try:
             self._migrate()
+            self._move_videos_out()
             self.collect_media()
             self._remove_orphans()
             self.compacted_bytes = self._auto_compact()
@@ -709,13 +739,92 @@ class Database:
 
     def add_media(self, filename, mime, data):
         """Store a file for a media block; it is attached when the task is saved."""
+        if mime.startswith("video/") and self.media_dir:
+            return self.store_video(filename, mime, io.BytesIO(data), len(data))
         with self._lock, self.conn:
             media_id = self._insert_media(filename, mime, data)
         return self._media_info([media_id])[media_id]
 
+    def store_video(self, filename, mime, stream, length):
+        """Write a video from `stream` (length bytes) into the media folder, without holding it in
+        memory, and register it. Files are named after their content: the same video sent twice is
+        stored once."""
+        if not self.media_dir:
+            return self.add_media(filename, mime, stream.read(length))
+        self.media_dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.media_dir / f".upload-{uuid.uuid4().hex}.tmp"
+        digest, written = hashlib.sha256(), 0
+        try:
+            with open(tmp, "wb") as out:
+                while written < length:
+                    chunk = stream.read(min(1024 * 1024, length - written))
+                    if not chunk:
+                        raise ValueError("Envoi interrompu.")
+                    digest.update(chunk)
+                    out.write(chunk)
+                    written += len(chunk)
+            name = digest.hexdigest() + _video_ext(filename, mime)
+            with self._lock, self.conn:
+                target = self.media_dir / name
+                if target.exists():
+                    tmp.unlink()
+                else:
+                    os.replace(tmp, target)
+                media_id = self.conn.execute(
+                    "INSERT INTO media (filename, mime, size, data, created_at, file) VALUES (?,?,?,?,?,?)",
+                    (filename, mime, written, b"", now_iso(), name)).lastrowid
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+        return self._media_info([media_id])[media_id]
+
     def get_media(self, media_id):
+        """Media row; for a video stored as a file, "path" is its location (data is empty)."""
         with self._lock:
-            return self._one("SELECT * FROM media WHERE id=?", (media_id,))
+            row = self._one("SELECT * FROM media WHERE id=?", (media_id,))
+        if row:
+            row["path"] = self.media_dir / row["file"] if row["file"] and self.media_dir else None
+        return row
+
+    def _move_videos_out(self):
+        """Videos stored in the database by versions before 1.14 move to the media folder."""
+        if not self.media_dir:
+            return 0
+        with self._lock:
+            ids = [r[0] for r in self.conn.execute("SELECT id FROM media WHERE file='' AND mime LIKE 'video/%'")]
+            for media_id in ids:
+                row = self._one("SELECT filename, mime, data FROM media WHERE id=?", (media_id,))
+                data = bytes(row["data"])
+                name = hashlib.sha256(data).hexdigest() + _video_ext(row["filename"], row["mime"])
+                self.media_dir.mkdir(parents=True, exist_ok=True)
+                target = self.media_dir / name
+                if not target.exists():
+                    tmp = self.media_dir / f".move-{uuid.uuid4().hex}.tmp"
+                    tmp.write_bytes(data)
+                    os.replace(tmp, target)  # the file is complete before the row points to it
+                with self.conn:
+                    self.conn.execute("UPDATE media SET file=?, data=? WHERE id=?", (name, b"", media_id))
+            return len(ids)
+
+    def _remove_unused_files(self):
+        """Delete files of the media folder that no row points to (and uploads interrupted long ago)."""
+        if not self.media_dir or not self.media_dir.is_dir():
+            return 0, 0
+        used = {r[0] for r in self.conn.execute("SELECT DISTINCT file FROM media WHERE file != ''")}
+        count = size = 0
+        old = datetime.now().timestamp() - 86400
+        for f in self.media_dir.iterdir():
+            stale_tmp = f.name.startswith(".") and f.name.endswith(".tmp") and f.stat().st_mtime < old
+            if f.is_file() and (stale_tmp or (not f.name.startswith(".") and f.name not in used)):
+                size += f.stat().st_size
+                f.unlink()
+                count += 1
+        return count, size
+
+    def _media_folder_bytes(self):
+        if not self.media_dir or not self.media_dir.is_dir():
+            return 0
+        return sum(f.stat().st_size for f in self.media_dir.iterdir() if f.is_file())
 
     def _media_info(self, ids):
         ids = list(ids)
@@ -745,7 +854,8 @@ class Database:
         """[(id, bytes)] of media no block references, older than the grace delay."""
         used = self._used_media()
         cutoff = datetime.now(timezone.utc).timestamp() - grace_seconds
-        return [(r["id"], r["bytes"]) for r in self._all("SELECT id, created_at, length(data) AS bytes FROM media")
+        return [(r["id"], r["bytes"]) for r in self._all(
+                    "SELECT id, created_at, CASE WHEN file = '' THEN length(data) ELSE size END AS bytes FROM media")
                 if r["id"] not in used and parse_iso(r["created_at"]).timestamp() < cutoff]
 
     def collect_media(self, grace_seconds=MEDIA_GRACE_DAYS * 86400):
@@ -754,7 +864,9 @@ class Database:
             stale = self._unused_media(grace_seconds)
             for media_id, _ in stale:
                 self.conn.execute("DELETE FROM media WHERE id=?", (media_id,))
-            return len(stale)
+        with self._lock:
+            self._remove_unused_files()
+        return len(stale)
 
     # Rows whose owner is gone (left by an old version or a database edited without foreign keys),
     # and files of the pre-v5 format that the v5 migration already moved into "media".
@@ -797,7 +909,8 @@ class Database:
             page_size = one("PRAGMA page_size")[0]
             free = one("PRAGMA freelist_count")[0] * page_size
             file_bytes, wal_bytes, backups = self._files()
-            media = one("SELECT COUNT(*), COALESCE(SUM(length(data)), 0) FROM media")
+            images = one("SELECT COUNT(*), COALESCE(SUM(length(data)), 0) FROM media WHERE file = ''")
+            videos = one("SELECT COUNT(*) FROM media WHERE file != ''")[0]
             captures = one("SELECT COUNT(*), COALESCE(SUM(length(data)), 0) FROM images")
             text = lambda table, cols: one(  # noqa: E731
                 f"SELECT COUNT(*), COALESCE(SUM({' + '.join(f'length({c})' for c in cols)}), 0) FROM {table}")
@@ -808,9 +921,10 @@ class Database:
             unused = self._unused_media(CLEANUP_GRACE_SECONDS)
             orphans = self._orphans()
             return {
-                "file_bytes": file_bytes, "journal_bytes": wal_bytes,
+                "file_bytes": file_bytes, "journal_bytes": wal_bytes, "media_folder_bytes": self._media_folder_bytes(),
                 "content": [
-                    {"label": "Images et vidéos des tâches", "count": media[0], "bytes": media[1]},
+                    {"label": "Images des tâches", "count": images[0], "bytes": images[1]},
+                    {"label": "Vidéos (dossier media)", "count": videos, "bytes": self._media_folder_bytes()},
                     {"label": "Captures des livraisons", "count": captures[0], "bytes": captures[1]},
                     {"label": f"Livraisons ({deliveries}) : tâches et commentaires",
                      "count": d_tasks[0] + comments[0], "bytes": d_tasks[1] + comments[1]},
@@ -845,7 +959,7 @@ class Database:
     def cleanup(self, delete_backups=False):
         """Delete unused files and orphan rows, then give the space back to the disk (VACUUM)."""
         with self._lock:
-            before = sum(self._files()[:2])
+            before = sum(self._files()[:2]) + self._media_folder_bytes()
             removed_media = self.collect_media(CLEANUP_GRACE_SECONDS)
             removed_rows = self._remove_orphans()
             self._compact()
@@ -855,7 +969,7 @@ class Database:
                     Path(self.path).with_name(b["name"]).unlink()
                     removed_backups += 1
                     backup_bytes += b["bytes"]
-            after = sum(self._files()[:2])
+            after = sum(self._files()[:2]) + self._media_folder_bytes()
             report = self.storage()
             report["result"] = {"media": removed_media, "rows": removed_rows, "backups": removed_backups,
                                 "saved_bytes": max(0, before - after) + backup_bytes}
