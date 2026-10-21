@@ -365,6 +365,6 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.5.1** — Correctif : seul le contenu de la fenêtre de modification défile.
 - **v1.6** — Nom de l'application modifiable (E24), version visible dans l'interface et les
   rapports (E25). Pas de changement de schéma.
-- **v1.8** — Variables dans le titre des tâches (livraison, rapports, noms des .docx).
 - **v1.7** — Livraison clôturée en lecture seule jusqu'à sa réouverture (E26), clôture qui met les
   chronos en pause. Pas de changement de schéma.
+- **v1.8** — Variables dans le titre des tâches (livraison, rapports, noms des .docx).
