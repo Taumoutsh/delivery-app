@@ -85,13 +85,13 @@ def build_docx(delivery, db):
     doc.heading("Synthèse", 1)
     rows = [[doc.run(h, bold=True, color="FFFFFF") for h in ("#", "Tâche", "Statut", "Estimé", "Passé")]]
     for i, t in enumerate(delivery["tasks"], 1):
-        rows.append([doc.run(str(i)), doc.run(t["title"]), doc.run(STATUS_LABELS.get(t["status"], t["status"])),
+        rows.append([doc.run(str(i)), doc.run(render_command(t["title"], variables)), doc.run(STATUS_LABELS.get(t["status"], t["status"])),
                      doc.run(fmt_duration(t["estimated_minutes"] * 60)), doc.run(fmt_duration(live_elapsed(t)))])
     doc.table(rows, widths=[0.5, 5, 1.8, 1.2, 1.2])
 
     doc.heading("Détail des tâches", 1)
     for i, t in enumerate(delivery["tasks"], 1):
-        doc.heading(f"{i}. {t['title']}", 2)
+        doc.heading(f"{i}. {render_command(t['title'], variables)}", 2)
         doc.paragraph(doc.run(_task_meta(t), color="55606E", size=9))
         if t["description"]:
             doc.paragraph(doc.run(render_command(t["description"], variables)))
@@ -184,10 +184,11 @@ def build_table_docx(task, delivery, block_id=None):
 
     With several tables each one is preceded by its title.
     """
-    tables = _tables(task, build_variables(delivery), block_id)
+    variables = build_variables(delivery)
+    tables = _tables(task, variables, block_id)
     if not tables:
         raise ValueError("Tableau introuvable." if block_id else "Cette tâche n'a pas de tableau.")
-    doc = Docx(task["title"])
+    doc = Docx(render_command(task["title"], variables))
     for title, table in tables:
         if title and len(tables) > 1:
             doc.paragraph(doc.run(title, bold=True), keep_next=True, after=60)
@@ -279,13 +280,13 @@ def build_pdf(delivery, db):
     rows = [[[(h, pdf.BOLD, pdf.WHITE, None)] for h in ("#", "Tâche", "Statut", "Estimé", "Passé")]]
     for i, t in enumerate(delivery["tasks"], 1):
         rows.append([[(v, pdf.REGULAR, pdf.INK, None)] for v in (
-            str(i), t["title"], STATUS_LABELS.get(t["status"], t["status"]),
+            str(i), render_command(t["title"], variables), STATUS_LABELS.get(t["status"], t["status"]),
             fmt_duration(t["estimated_minutes"] * 60), fmt_duration(live_elapsed(t)))])
     doc.table(rows, widths=[0.5, 5, 1.8, 1.2, 1.2], size=9)
 
     doc.heading("Détail des tâches", 14, pdf.ACCENT)
     for i, t in enumerate(delivery["tasks"], 1):
-        doc.heading(f"{i}. {t['title']}", 11.5, before=8, after=2)
+        doc.heading(f"{i}. {render_command(t['title'], variables)}", 11.5, before=8, after=2)
         doc.text(_task_meta(t), size=8, color=pdf.MUTED, after=5)
         if t["description"]:
             doc.text(render_command(t["description"], variables), size=9.5)

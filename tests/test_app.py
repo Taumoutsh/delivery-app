@@ -272,6 +272,27 @@ class ApiTest(unittest.TestCase):
         status, d = self.call("POST", f"/api/delivery-tasks/{tid}/action", {"action": "done"})
         self.assertEqual((status, d["tasks"][0]["status"]), (200, "done"))
 
+    def test_variables_in_task_title(self):
+        _, d = self.call("POST", "/api/deliveries", {"version": "3.4.0", "variables": {"env": "recette"}})
+        _, d = self.call("POST", f"/api/deliveries/{d['id']}/tasks", {
+            "title": "Déployer {{version}} en {{env}}",
+            "blocks": [{"type": "table", "title": "", "spec": "A | B\nx | y"}]})
+        task = d["tasks"][-1]
+        self.assertEqual(task["title"], "Déployer {{version}} en {{env}}")  # stored as written
+        _, pdf = self.call("GET", f"/api/deliveries/{d['id']}/report.pdf")
+        content = pdf_content(pdf)  # the PDF draws words one by one
+        self.assertIn("(Déployer) Tj ET".encode("cp1252"), content)
+        self.assertIn(b"(recette) Tj ET", content)
+        self.assertNotIn(b"({{version}}) Tj", content)
+        _, docx = self.call("GET", f"/api/deliveries/{d['id']}/report.docx")
+        with zipfile.ZipFile(io.BytesIO(docx)) as z:
+            document = z.read("word/document.xml").decode()
+        self.assertIn("Déployer 3.4.0 en recette", document)
+        self.assertNotIn("Déployer {{version}}", document)
+        req = urllib.request.Request(f"{self.base}/api/delivery-tasks/{task['id']}/tables.docx")
+        with urllib.request.urlopen(req) as res:
+            self.assertIn("D%C3%A9ployer_3.4.0_en_recette", res.headers["Content-Disposition"])
+
     def test_app_title_and_version(self):
         from delivery_app import __version__
         _, st = self.call("GET", "/api/settings")
