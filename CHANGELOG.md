@@ -3,6 +3,13 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.8.0 — 2026-10-21
+
+- Les variables (`{{version}}`, `{{env}}`…) sont aussi remplacées dans le **titre** des tâches : dans
+  la livraison, dans les rapports PDF/Word (synthèse et détail) et dans le nom des fichiers `.docx`
+  des tableaux. Une variable non renseignée dans un titre est signalée comme ailleurs.
+- Le titre reste affiché tel qu'écrit dans le modèle et dans l'éditeur.
+
 ## 1.7.0 — 2026-10-20
 
 - Une livraison clôturée est en **lecture seule** : plus de démarrage ni de validation de tâche, de

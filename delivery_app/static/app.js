@@ -135,7 +135,7 @@
   }
 
   // Every text of a task that may hold {{variables}}.
-  const taskText = (t) => [t.description, ...(t.blocks || []).flatMap((b) => Blocks.get(b.type)?.texts(b) || [])].join('\n');
+  const taskText = (t) => [t.title, t.description, ...(t.blocks || []).flatMap((b) => Blocks.get(b.type)?.texts(b) || [])].join('\n');
 
   // Progress weight of a task = its estimated time (a task without estimate counts as 1 minute).
   const weightOf = (t) => Math.max(1, t.estimated_minutes || 0);
@@ -305,7 +305,7 @@
     const totalMin = active.reduce((a, t) => a + t.estimated_minutes, 0);
 
     const segs = d.tasks.map((t) => `<span class="seg ${t.status}" style="flex:${weightOf(t)}"
-      title="${esc(t.title)} · ${t.estimated_minutes ? fmtDur(t.estimated_minutes * 60) : 'sans estimation'} · ${STATUS[t.status]}"></span>`).join('');
+      title="${esc(renderText(t.title, vars))} · ${t.estimated_minutes ? fmtDur(t.estimated_minutes * 60) : 'sans estimation'} · ${STATUS[t.status]}"></span>`).join('');
 
     return `
       <div class="head">
@@ -459,7 +459,7 @@
             : `<button class="status-btn" data-act="task" data-action="${finished(t) ? 'reopen' : 'done'}" data-id="${t.id}"
                   aria-label="${finished(t) ? 'Rouvrir la tâche' : 'Valider la tâche'}">${t.status === 'skipped' ? '–' : ICONS.check}</button>`}
           <div class="task-title" data-act="toggle" data-id="${t.id}">
-            <strong>${i + 1}. ${esc(t.title)}</strong>
+            <strong>${i + 1}. ${renderHtml(t.title, vars)}</strong>
             <span class="task-meta">
               ${t.status !== 'todo' ? `<span class="pill ${t.status}">${STATUS[t.status]}</span>` : ''}
               <span class="badge">Estimé ${est ? fmtDur(est * 60) : '—'}</span>

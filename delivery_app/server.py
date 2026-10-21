@@ -12,6 +12,7 @@ from urllib.parse import quote, unquote, urlparse
 
 from . import __version__, launcher, report
 from .db import DeliveryClosed
+from .templating import build_variables, render_command
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_IMAGE = 15 * 1024 * 1024
@@ -147,7 +148,7 @@ def send_task_tables(h, task_id, block_id):
     delivery = found(h.db.get_delivery(task["delivery_id"]))
     data = report.build_table_docx(task, delivery, block_id)
     block = next((b for b in task["blocks"] if b["id"] == block_id), None)
-    name = (block and block.get("title")) or task["title"]
+    name = render_command((block and block.get("title")) or task["title"], build_variables(delivery))
     safe = re.sub(r"[^\w.-]+", "_", f"tableau_{name[:40]}_{delivery['version']}")
     h.send_bytes(data, DOCX_MIME, f"{safe}.docx", attachment=True)
 

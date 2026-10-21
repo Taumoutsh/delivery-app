@@ -49,7 +49,7 @@ Application web locale servant de checklist pour préparer une livraison logicie
 
 ### 2.1 Variables
 
-Syntaxe `{{nom}}` dans la description et dans les champs texte des éléments (commande, lien,
+Syntaxe `{{nom}}` dans le titre (depuis v1.8), la description et dans les champs texte des éléments (commande, lien,
 programme, tableau, note, titres). Substitution à l'affichage, à la copie, au lancement et dans les
 rapports. Une variable inconnue reste telle quelle et est signalée (soulignée en rouge).
 
@@ -367,3 +367,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
   rapports (E25). Pas de changement de schéma.
 - **v1.7** — Livraison clôturée en lecture seule jusqu'à sa réouverture (E26), clôture qui met les
   chronos en pause. Pas de changement de schéma.
+- **v1.8** — Variables dans le titre des tâches (livraison, rapports, noms des .docx).
