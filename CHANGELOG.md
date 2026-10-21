@@ -3,6 +3,14 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.13.0 — 2026-10-21
+
+- **Chronos enchaînés** : le chrono de la première tâche démarre à la création de la livraison.
+  Quand une tâche est validée ou marquée non applicable, le chrono de la tâche suivante démarre,
+  et elle s'ouvre à l'écran. Rien ne démarre si un autre chrono tourne déjà.
+- Désactivable : fenêtre « Application » → case « Enchaîner les chronos ».
+- Aucun changement de format de base.
+
 ## 1.12.0 — 2026-10-21
 
 - **Ménage de la base** : fenêtre « Application » (clic sur le titre ou la version) → section

@@ -143,6 +143,39 @@ class ApiTest(unittest.TestCase):
         self.assertIn(b"(\x95) Tj", content)  # bullet (cp1252)
         self.assertNotIn(b"**", content)
 
+    def test_timers_are_chained(self):
+        status = lambda d: [t["status"] for t in d["tasks"]]  # noqa: E731
+        _, d = self.call("POST", "/api/deliveries", {"version": "8.0.0"})
+        self.assertEqual(status(d)[:3], ["running", "todo", "todo"])  # first task starts with the delivery
+        self.assertIsNotNone(d["tasks"][0]["started_at"])
+        t = d["tasks"]
+        _, d = self.call("POST", f"/api/delivery-tasks/{t[0]['id']}/action", {"action": "done"})
+        self.assertEqual(status(d)[:3], ["done", "running", "todo"])
+        # Skipping a task not started yet hands over to the one after it, not to an earlier one.
+        self.call("POST", f"/api/delivery-tasks/{t[1]['id']}/action", {"action": "pause"})
+        _, d = self.call("POST", f"/api/delivery-tasks/{t[2]['id']}/action", {"action": "skip"})
+        self.assertEqual(status(d)[:4], ["done", "paused", "skipped", "running"])
+        # No chaining while another timer runs.
+        _, d = self.call("POST", f"/api/delivery-tasks/{t[1]['id']}/action", {"action": "done"})
+        self.assertEqual(status(d)[:4], ["done", "done", "skipped", "running"])
+        self.assertEqual(status(d).count("running"), 1)
+        # After the last task, the earlier tasks still to do are taken back from the top.
+        last = d["tasks"][-1]
+        for x in d["tasks"][3:-1]:
+            self.call("POST", f"/api/delivery-tasks/{x['id']}/action", {"action": "pause"})
+        _, d = self.call("POST", f"/api/delivery-tasks/{last['id']}/action", {"action": "skip"})
+        self.assertEqual(status(d)[3], "running")
+
+        _, settings = self.call("PUT", "/api/settings", {"auto_timer": False})
+        self.assertFalse(settings["auto_timer"])
+        try:
+            _, d = self.call("POST", "/api/deliveries", {"version": "8.0.1"})
+            self.assertNotIn("running", status(d))
+            _, d = self.call("POST", f"/api/delivery-tasks/{d['tasks'][0]['id']}/action", {"action": "done"})
+            self.assertNotIn("running", status(d))
+        finally:
+            self.call("PUT", "/api/settings", {"auto_timer": True})
+
     def test_storage_api(self):
         status, report = self.call("GET", "/api/storage")
         self.assertEqual(status, 200)
