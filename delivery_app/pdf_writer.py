@@ -21,8 +21,9 @@ CODE_BG = (0.933, 0.949, 0.961)
 ZEBRA = (0.953, 0.965, 0.973)
 WHITE = (1, 1, 1)
 
-FONTS = {"F1": "Helvetica", "F2": "Helvetica-Bold", "F3": "Helvetica-Oblique", "F4": "Courier"}
-REGULAR, BOLD, ITALIC, MONO = "F1", "F2", "F3", "F4"
+FONTS = {"F1": "Helvetica", "F2": "Helvetica-Bold", "F3": "Helvetica-Oblique", "F4": "Courier",
+         "F5": "Helvetica-BoldOblique"}
+REGULAR, BOLD, ITALIC, MONO, BOLD_ITALIC = "F1", "F2", "F3", "F4", "F5"
 
 # Advance widths (1/1000 em) for ASCII 32..126, from the standard AFM files.
 _HELV = [278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556,
@@ -35,7 +36,7 @@ _HELV_BOLD = [278, 333, 474, 556, 556, 889, 722, 238, 333, 333, 389, 584, 278, 3
               611, 778, 722, 278, 556, 722, 611, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667,
               667, 611, 333, 278, 333, 584, 556, 333, 556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556,
               278, 889, 611, 611, 611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584]
-_SPECIAL = {"—": 1000, "…": 1000, "–": 556, "·": 278, "’": 222, "‘": 222, "“": 333, "”": 333, "«": 556,
+_SPECIAL = {"—": 1000, "…": 1000, "•": 350, "–": 556, "·": 278, "’": 222, "‘": 222, "“": 333, "”": 333, "«": 556,
             "»": 556, "€": 556, "°": 400, "\u00a0": 278}
 _REPLACE = {"\u202f": "\u00a0", "\u2009": " ", "\u2192": "->", "\u2713": "v", "\u2014": "—"}
 
@@ -48,7 +49,7 @@ def clean(text):
 def char_width(c, font):
     if font == MONO:
         return 600
-    table = _HELV_BOLD if font == BOLD else _HELV
+    table = _HELV_BOLD if font in (BOLD, BOLD_ITALIC) else _HELV
     o = ord(c)
     if 32 <= o <= 126:
         return table[o - 32]
@@ -229,11 +230,12 @@ class Pdf:
     def _link(self, x, y, w, h, url):
         self.page["annots"].append((x, y, x + w, y + h, url))
 
-    # rich text layout: segments are (text, font, color, url)
+    # rich text layout: segments are (text, font, color, url[, decorations]) — decorations: "u", "s"
     def layout(self, segments, size, max_width):
-        """Wrap (text, font, color, url) segments into lines of (x, word, font, color, url)."""
+        """Wrap segments into lines of (x, word, font, color, url, decorations)."""
         lines, line, x = [], [], 0.0
-        for text, font, color, url in segments:
+        for text, font, color, url, *deco in segments:
+            deco = deco[0] if deco else ""
             for p, para in enumerate(clean(text).split("\n")):
                 if p:
                     lines.append(line)
@@ -251,29 +253,41 @@ class Pdf:
                         cut = len(token) - 1
                         while cut > 1 and text_width(token[:cut], font, size) > max_width:
                             cut -= 1
-                        lines.append([(0.0, token[:cut], font, color, url)])
+                        lines.append([(0.0, token[:cut], font, color, url, deco)])
                         token = token[cut:]
                         w = text_width(token, font, size)
-                    line.append((x, token, font, color, url))
+                    line.append((x, token, font, color, url, deco))
                     x += w
         if line:
             lines.append(line)
         return lines
 
+    def _hline(self, x, y, w, color):
+        self.page["ops"].append(f"{rgb(color)} RG 0.4 w {x:.2f} {y:.2f} m {x + w:.2f} {y:.2f} l S")
+
     def _draw_line(self, line, x0, baseline, size):
-        for x, word, font, color, url in line:
+        for k, (x, word, font, color, url, deco) in enumerate(line):
             self._text(x0 + x, baseline, word, font, size, color)
+            w = text_width(word, font, size)
+            # Decorations also cover the space up to the next word of the same span.
+            nxt = line[k + 1] if k + 1 < len(line) else None
+            span = nxt[0] - x if nxt and nxt[5] == deco and nxt[4] == url else w
+            if url or "u" in deco:
+                self._hline(x0 + x, baseline - 1.5, span if not url else w, color)
+            if "s" in deco:
+                self._hline(x0 + x, baseline + size * 0.3, span, color)
             if url:
-                w = text_width(word, font, size)
-                self.page["ops"].append(f"{rgb(color)} RG 0.4 w {x0 + x:.2f} {baseline - 1.5:.2f} m "
-                                        f"{x0 + x + w:.2f} {baseline - 1.5:.2f} l S")
                 self._link(x0 + x, baseline - 2.5, w, size + 2, url)
 
-    def rich(self, segments, size=10, indent=0, after=4, leading=None):
+    def rich(self, segments, size=10, indent=0, after=4, leading=None, marker=None):
+        """Wrapped rich text; with marker ("•", "3."), a list item hanging after its marker."""
         leading = leading or size * 1.35
-        for line in self.layout(segments, size, self.width - indent):
+        hang = size * 1.6 if marker else 0
+        for n, line in enumerate(self.layout(segments, size, self.width - indent - hang)):
             self.ensure(leading)
-            self._draw_line(line, MARGIN + indent, self.y - size, size)
+            if marker and n == 0:
+                self._text(MARGIN + indent, self.y - size, clean(marker), REGULAR, size, line[0][3] if line else INK)
+            self._draw_line(line, MARGIN + indent + hang, self.y - size, size)
             self.y -= leading
         self.y -= after
 

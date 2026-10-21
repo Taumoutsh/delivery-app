@@ -10,7 +10,7 @@ from . import __version__
 from . import pdf_writer as pdf
 from .db import live_elapsed
 from .docx_writer import Docx
-from .templating import build_variables, parse_table, render_command
+from .templating import build_variables, parse_rich, parse_table, render_command
 
 STATUS_LABELS = {
     "todo": "À faire",
@@ -154,8 +154,22 @@ def _docx_media(doc, b, variables, db):
             doc.paragraph(doc.run(f"[{kind} : {f['filename']} — à consulter dans l'application]", italic=True))
 
 
+def _rich_items(b, variables):
+    """(kind, marker, [(text, styles)]) for each paragraph or list item of a note."""
+    for block in parse_rich(b["text"]):
+        for n, item in enumerate(block["items"]):
+            marker = {"p": None, "ul": "•", "ol": f"{block['start'] + n}."}[block["kind"]]
+            yield block["kind"], marker, [(render_command(t, variables), st) for t, st in item]
+
+
 def _docx_note(doc, b, variables, db):
-    doc.paragraph(doc.run(render_command(b["text"], variables)), style="Code")
+    for kind, marker, item in _rich_items(b, variables):
+        runs = "".join(doc.run(t, bold="b" in st, italic="i" in st, underline="u" in st, strike="s" in st)
+                       for t, st in item)
+        if marker:
+            doc.paragraph(doc.run(marker).replace("</w:r>", "<w:tab/></w:r>") + runs, indent=567, hanging=283, after=40)
+        else:
+            doc.paragraph(runs, after=80)
 
 
 DOCX_RENDERERS = {
@@ -251,8 +265,14 @@ def _pdf_media(doc, b, variables, db):
             doc.text(f"[{kind} : {f['filename']} — à consulter dans l'application]", pdf.ITALIC, 8.5, pdf.MUTED)
 
 
+_PDF_FONT = {"": pdf.REGULAR, "b": pdf.BOLD, "i": pdf.ITALIC, "bi": pdf.BOLD_ITALIC}
+
+
 def _pdf_note(doc, b, variables, db):
-    doc.text(render_command(b["text"], variables), pdf.ITALIC, 9.5)
+    for kind, marker, item in _rich_items(b, variables):
+        segments = [(t, _PDF_FONT["".join(sorted(st & {"b", "i"}))], pdf.INK, None, "".join(sorted(st & {"u", "s"})))
+                    for t, st in item]
+        doc.rich(segments, size=9.5, indent=10 if marker else 0, after=2 if marker else 4, marker=marker)
 
 
 PDF_RENDERERS = {

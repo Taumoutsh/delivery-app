@@ -25,7 +25,7 @@ from delivery_app import db as dbmod
 from delivery_app import pdf_writer, report
 from delivery_app.db import Database, SchemaTooNew
 from delivery_app.server import make_server
-from delivery_app.templating import build_variables, parse_table, render_command
+from delivery_app.templating import build_variables, parse_inline, parse_rich, parse_table, render_command
 
 PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
@@ -122,6 +122,23 @@ class ApiTest(unittest.TestCase):
         self.assertIsNotNone(d["completed_at"])
         _, listing = self.call("GET", "/api/deliveries")
         self.assertIn(d["id"], [x["id"] for x in listing])
+
+    def test_formatted_note_in_reports(self):
+        _, d = self.call("POST", "/api/deliveries", {"version": "6.2.0"})
+        _, d = self.call("POST", f"/api/deliveries/{d['id']}/tasks", {"title": "Notes", "blocks": [{"type": "note", "text":
+            "Avant **{{version}}** : *prévenir* __le support__ ~~hier~~\n\n- Point un\n- Point **deux**\n\n1. Étape\n2. Suite"}]})
+        _, docx = self.call("GET", f"/api/deliveries/{d['id']}/report.docx")
+        document = zipfile.ZipFile(io.BytesIO(docx)).read("word/document.xml").decode()
+        for expected in ("<w:b/>", "<w:i/>", '<w:u w:val="single"/>', "<w:strike/>", ">6.2.0<", ">•<", ">2.<", "<w:tab/>"):
+            self.assertIn(expected, document)
+        self.assertNotIn("**", document)
+        _, report = self.call("GET", f"/api/deliveries/{d['id']}/report.pdf")
+        content = pdf_content(report)
+        self.assertIn(b"/BaseFont /Helvetica-BoldOblique", report)
+        self.assertIn(b"/F2 9.50 Tf", content)  # bold
+        self.assertIn(b"/F3 9.50 Tf", content)  # italic
+        self.assertIn(b"(\x95) Tj", content)  # bullet (cp1252)
+        self.assertNotIn(b"**", content)
 
     def test_template_changes_do_not_rewrite_history(self):
         _, d = self.call("POST", "/api/deliveries", {"version": "1.0.0"})
@@ -428,6 +445,21 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(render_command("v{{version}} {{ major }}.{{minor}} {{env}} {{unknown}}", variables),
                          "v2.4.1 2.4 prod {{unknown}}")
         self.assertEqual(variables["date"], "2026-01-02")
+
+    def test_rich_note_markup(self):
+        plain = frozenset()
+        self.assertEqual(parse_inline("**gras** *it* __sou__ ~~bar~~"), [
+            ("gras", {"b"}), (" ", plain), ("it", {"i"}), (" ", plain), ("sou", {"u"}), (" ", plain), ("bar", {"s"})])
+        self.assertEqual(parse_inline("x **a *b* c** y")[2], ("b", {"b", "i"}))
+        # Stars and underscores that are not formatting stay as typed.
+        for text in ("rm *.log", "2 * 3 * 4", "{{prev_version}}", "prev__version", "\\*pas\\*"):
+            self.assertEqual([t for t, st in parse_inline(text) if st], [], text)
+        self.assertEqual(parse_inline("\\*pas\\*"), [("*pas*", plain)])
+        blocks = parse_rich("Intro\nsuite\n\n- un\n* deux\n3. trois\n4) quatre\nfin **a\nb**")
+        self.assertEqual([(b["kind"], b["start"], len(b["items"])) for b in blocks],
+                         [("p", 1, 1), ("ul", 1, 2), ("ol", 3, 2), ("p", 1, 1)])
+        self.assertEqual(blocks[0]["items"][0], [("Intro", plain), ("\n", plain), ("suite", plain)])
+        self.assertEqual(blocks[-1]["items"][0], [("fin **a", plain), ("\n", plain), ("b**", plain)])  # not across lines
 
     def test_variables_can_use_other_variables(self):
         variables = build_variables({"version": "2.4.1", "variables": {

@@ -27,6 +27,14 @@
     play: I('<path d="M5 3v10l8-5z" fill="currentColor"/>'),
   };
 
+  // Note formatting buttons: [format, label, shortcut, glyph].
+  const FORMATS = [
+    ['b', 'Gras', 'B', '<b>G</b>'], ['i', 'Italique', 'I', '<i>I</i>'], ['u', 'Souligné', 'U', '<u>S</u>'],
+    ['s', 'Barré', '', '<s>B</s>'],
+    ['ul', 'Liste à puces', '', I('<circle cx="3" cy="4.5" r="1.1" fill="currentColor"/><circle cx="3" cy="8" r="1.1" fill="currentColor"/><circle cx="3" cy="11.5" r="1.1" fill="currentColor"/><path d="M6 4.5h8M6 8h8M6 11.5h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>')],
+    ['ol', 'Liste numérotée', '', I('<text x="1" y="6.3" font-size="5" font-family="sans-serif" fill="currentColor">1</text><text x="1" y="13" font-size="5" font-family="sans-serif" fill="currentColor">2</text><path d="M6 4.5h8M6 11.5h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>')],
+  ];
+
   const field = (label, inner, hint = '', wide = true) => `
     <label class="bf${wide ? ' wide' : ''}"><span class="bf-label">${label}</span>${inner}${hint ? `<span class="hint">${hint}</span>` : ''}</label>`;
   const val = (card, f) => card.querySelector(`[data-f="${f}"]`)?.value ?? '';
@@ -139,12 +147,19 @@
       hint: 'Consigne, avertissement ou commentaire permanent.',
       icon: ICON.note,
       blank: () => ({ text: '' }),
-      editor: (b, h) => field('Texte', `<textarea data-f="text" rows="3" placeholder="Prévenir l'équipe support avant de déployer {{version}}.">${h.esc(b.text)}</textarea>`),
+      editor: (b, h) => `<div class="bf wide"><span class="bf-label">Texte</span>
+          <div class="rich-bar" role="toolbar" aria-label="Mise en forme">
+            ${FORMATS.map(([fmt, label, key, glyph]) => `<button type="button" class="btn ghost sm fmt-${fmt}" data-ed="fmt" data-fmt="${fmt}"
+              title="${label}${key ? ` (Ctrl+${key})` : ''}" aria-label="${label}">${glyph}</button>`).join('')}
+          </div>
+          <textarea data-f="text" data-rich rows="4" placeholder="Prévenir l'équipe support avant de déployer {{version}}.">${h.esc(b.text)}</textarea>
+          <span class="hint"><code>**gras**</code> <code>*italique*</code> <code>__souligné__</code> <code>~~barré~~</code>,
+            lignes <code>- </code> pour une liste à puces, <code>1. </code> pour une liste numérotée.</span></div>`,
       read: (card) => ({ text: val(card, 'text') }),
       isEmpty: (b) => !b.text.trim(),
-      summary: (b) => oneLine(b.text),
+      summary: (b) => oneLine(b.text).replace(/^\s*([-*•]|\d+[.)])\s+/, '').replace(/\*\*|__|~~|(?<!\\)\*/g, ''),
       texts: (b) => [b.text],
-      view: (b, { vars, h }) => `<div class="note-box">${h.renderHtml(b.text, vars)}</div>`,
+      view: (b, { vars, h }) => `<div class="note-box rich">${h.richHtml(b.text, vars)}</div>`,
     },
   };
 
