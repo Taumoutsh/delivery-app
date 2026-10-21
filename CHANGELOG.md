@@ -3,6 +3,18 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.12.0 — 2026-10-21
+
+- **Ménage de la base** : fenêtre « Application » (clic sur le titre ou la version) → section
+  « Stockage ». Elle montre la taille de la base, ce qu'elle contient et ce qui peut être libéré.
+  Le bouton « Faire le ménage » supprime les images et vidéos plus utilisées par aucune tâche et
+  les données orphelines d'anciennes versions, puis **compacte le fichier**. On peut aussi supprimer
+  les sauvegardes `.bak` faites avant les mises à jour de format.
+- Le fichier se compacte aussi **automatiquement au démarrage** quand plus d'un quart est de
+  l'espace vide laissé par des suppressions.
+- Le journal de la base ne garde plus la taille de la plus grosse vidéo envoyée.
+- Les livraisons, leur historique et le modèle ne sont jamais touchés. Aucun changement de format.
+
 ## 1.11.0 — 2026-10-21
 
 - **Listes à plusieurs niveaux** dans les notes : Tab sur une ligne de liste la passe au niveau

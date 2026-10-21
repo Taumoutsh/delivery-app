@@ -1301,6 +1301,40 @@
     setTimeout(() => { btn.textContent = label; }, 2200);
   }
 
+  function fmtBytes(n) {
+    if (n < 1024) return `${n} o`;
+    const units = ['Ko', 'Mo', 'Go'];
+    let v = n;
+    let i = -1;
+    do { v /= 1024; i += 1; } while (v >= 1024 && i < units.length - 1);
+    return `${v.toLocaleString('fr-FR', { maximumFractionDigits: v < 10 ? 1 : 0 })} ${units[i]}`;
+  }
+
+  function storageHtml(d) {
+    const r = d.reclaimable;
+    const backupsBytes = d.backups.reduce((a, b) => a + b.bytes, 0);
+    const gain = r.unused_media.bytes + r.orphans.bytes + r.free_bytes + r.journal_bytes;
+    const items = [
+      r.unused_media.count && `${r.unused_media.count} fichier${r.unused_media.count > 1 ? 's' : ''} d'images ou vidéos plus utilisé${r.unused_media.count > 1 ? 's' : ''} par aucune tâche (${fmtBytes(r.unused_media.bytes)})`,
+      r.orphans.count && `${r.orphans.count} élément${r.orphans.count > 1 ? 's' : ''} orphelin${r.orphans.count > 1 ? 's' : ''} d'anciennes versions (${fmtBytes(r.orphans.bytes)})`,
+      r.free_bytes && `${fmtBytes(r.free_bytes)} d'espace laissé libre par les suppressions, que le fichier garde tant qu'il n'est pas compacté`,
+      r.journal_bytes && `journal de la base (${fmtBytes(r.journal_bytes)})`,
+    ].filter(Boolean);
+    return `<h3>Stockage</h3>
+      <div class="storage-total"><b>${fmtBytes(d.file_bytes + d.journal_bytes)}</b> pour la base${backupsBytes
+        ? ` · <b>${fmtBytes(backupsBytes)}</b> de sauvegardes` : ''}</div>
+      <table class="storage-table"><tbody>
+        ${d.content.map((c) => `<tr><td>${esc(c.label)}</td><td class="num">${c.count}</td><td class="num">${fmtBytes(c.bytes)}</td></tr>`).join('')}
+      </tbody></table>
+      ${items.length ? `<p>Le ménage peut libérer environ <b>${fmtBytes(gain)}</b> :</p><ul class="storage-gain">${items.map((t) => `<li>${t}</li>`).join('')}</ul>`
+        : '<p class="muted">Rien à libérer dans la base : elle ne contient que ce qu\'utilisent le modèle et les livraisons.</p>'}
+      ${d.backups.length ? `<label class="check"><input type="checkbox" data-del-backups>
+          Supprimer aussi ${d.backups.length > 1 ? `les ${d.backups.length} sauvegardes` : 'la sauvegarde'} faite${d.backups.length > 1 ? 's' : ''} avant les mises à jour de format
+          (${fmtBytes(backupsBytes)}, du ${fmtDate(d.backups[0].modified)}${d.backups.length > 1 ? ` au ${fmtDate(d.backups[d.backups.length - 1].modified)}` : ''})</label>` : ''}
+      <div><button type="button" class="btn" data-cleanup>Faire le ménage</button></div>
+      <p class="hint">Les livraisons, leur historique et le modèle ne sont jamais modifiés. Le ménage se fait aussi en partie à chaque démarrage.</p>`;
+  }
+
   async function postComment(taskId) {
     const ta = document.getElementById(`c-${taskId}`);
     if (!ta || !ta.value.trim()) return;
@@ -1323,12 +1357,32 @@
           <dl class="about">
             <dt>Version</dt><dd class="num">${esc(st.app_version)}</dd>
             <dt>Format de la base</dt><dd class="num">v${esc(st.schema_version)}</dd>
-          </dl>`,
+          </dl>
+          <section class="storage" data-storage><h3>Stockage</h3><p class="muted">Calcul de la taille…</p></section>`,
         async onSubmit(form) {
           applySettings(await API.saveSettings({ app_title: form.app_title.value }));
           render();
           toast('Nom de l\'application enregistré');
         },
+      });
+      const section = document.querySelector('[data-storage]');
+      const show = (data) => { section.innerHTML = storageHtml(data); };
+      API.getStorage().then(show).catch((err) => { section.innerHTML = `<h3>Stockage</h3><p class="muted">${esc(err.message)}</p>`; });
+      section.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-cleanup]');
+        if (!btn) return;
+        btn.disabled = true;
+        btn.textContent = 'Ménage en cours…';
+        try {
+          const data = await API.cleanupStorage(section.querySelector('[data-del-backups]')?.checked || false);
+          show(data);
+          const r = data.result;
+          toast(r.saved_bytes ? `Ménage terminé : ${fmtBytes(r.saved_bytes)} libérés` : 'Ménage terminé : rien à libérer');
+        } catch (err) {
+          toast(err.message, true);
+          btn.disabled = false;
+          btn.textContent = 'Faire le ménage';
+        }
       });
     },
     'edit-delivery': () => deliveryModal(state.delivery),
