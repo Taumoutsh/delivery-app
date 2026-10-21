@@ -3,6 +3,11 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.9.2 — 2026-10-21
+
+- Lisibilité : un fin séparateur sépare chaque élément d'une tâche (commande, lien, programme,
+  tableau, médias, note). Il est en pointillés entre deux éléments du même type.
+
 ## 1.9.1 — 2026-10-21
 
 - Élément « Lien » : l'adresse n'est plus affichée à côté du bouton ; seul le libellé reste visible.
