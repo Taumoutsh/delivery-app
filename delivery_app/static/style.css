@@ -375,6 +375,10 @@ html.modal-open, html.modal-open body, html.modal-open .main { overflow: hidden;
 .note-box.rich li { white-space: pre-wrap; }
 .note-box.rich li + li { margin-top: 2px; }
 .rich-bar { display: flex; flex-wrap: wrap; gap: 2px; }
+textarea[data-rich] { tab-size: 4; }
+.note-box.rich li > ul, .note-box.rich li > ol { margin-top: 2px; }
+.note-box.rich ul ul { list-style-type: circle; }
+.note-box.rich ul ul ul { list-style-type: square; }
 .rich-bar .btn { min-width: 30px; justify-content: center; padding: 4px 8px; font-size: 13px; }
 .rich-bar .btn .ic { width: 15px; height: 15px; }
 .rich-bar .fmt-s { margin-right: 8px; }

@@ -282,7 +282,7 @@ class Pdf:
     def rich(self, segments, size=10, indent=0, after=4, leading=None, marker=None):
         """Wrapped rich text; with marker ("•", "3."), a list item hanging after its marker."""
         leading = leading or size * 1.35
-        hang = size * 1.6 if marker else 0
+        hang = max(size * 1.6, text_width(clean(marker), REGULAR, size) + size * 0.6) if marker else 0
         for n, line in enumerate(self.layout(segments, size, self.width - indent - hang)):
             self.ensure(leading)
             if marker and n == 0:

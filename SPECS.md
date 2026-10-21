@@ -37,6 +37,7 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E26 | Livraison clôturée non modifiable, sauf si elle est rouverte | ✅ v1.7 (serveur + interface) |
 | E27 | Variables par défaut pouvant utiliser d'autres variables | ✅ v1.9 (§2.1) |
 | E28 | Notes : gras, italique, souligné, barré, listes à puces et numérotées | ✅ v1.10 (§2.3 bis) |
+| E29 | Listes des notes à plusieurs niveaux (Tab) | ✅ v1.11 (§2.3 bis) |
 
 ## 2. Concepts
 
@@ -109,17 +110,24 @@ légère est interprétée à l'affichage et dans les rapports (`templating.pars
 | `**texte**` / `*texte*` / `__texte__` / `~~texte~~` | gras / italique / souligné / barré (combinables) |
 | ligne `- `, `* ` ou `• ` | élément de liste à puces |
 | ligne `1. ` ou `1) ` | élément de liste numérotée (commence au premier numéro saisi) |
+| ligne de liste en retrait (une tabulation, ou deux espaces, par niveau) | sous-liste (v1.11), jusqu'à 6 niveaux ; puces et numéros mélangeables |
 | ligne vide | nouveau paragraphe |
 | `\*` | astérisque littéral |
 
 - Un marqueur ne met en forme que s'il est refermé sur la même ligne, collé au texte (`**mot**`, pas
   `** mot **`) et pas au milieu d'un mot : `rm *.log`, `2 * 3`, `{{prev_version}}` restent intacts.
 - Les variables sont remplacées après l'analyse : une valeur contenant `*` n'est pas interprétée.
+- Sous-listes : un élément ne descend que d'un niveau sous la ligne qui précède (un retrait plus
+  grand est ramené à ce niveau) ; la numérotation repart dans chaque sous-liste et continue dans
+  une même liste ; un changement de type (puces ↔ numéros) à un niveau ouvre une nouvelle liste.
+  `parse_rich` renvoie les éléments à plat avec leur niveau ; la page les imbrique en `ul`/`ol`.
 - Éditeur : barre G / I / S / B / puces / numéros (sur la sélection, ou bascule si déjà appliqué),
   Ctrl+B / Ctrl+I / Ctrl+U, Entrée qui prolonge une liste (Entrée sur un élément vide la termine).
+  Tab / Maj+Tab sur des lignes de liste : niveau suivant / précédent, avec renumérotation ; ailleurs,
+  Tab garde son rôle (passer au champ suivant).
 - Rapports : Word en runs `w:b`, `w:i`, `w:u`, `w:strike` et paragraphes en retrait avec puce ou
-  numéro ; PDF avec Helvetica gras/oblique/gras-oblique, traits de soulignement et de barré, puces
-  et numéros en retrait.
+  numéro (retrait par niveau, puces • ◦ ▪) ; PDF avec Helvetica gras/oblique/gras-oblique, traits de
+  soulignement et de barré, puces (• – ·) et numéros en retrait par niveau.
 
 ### 2.3 Tableaux pour Word
 
@@ -415,3 +423,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.9.4** — Programme : chemin masqué à côté du bouton « Lancer » (visible au survol).
 - **v1.9.5** — Commentaire en cours de saisie publié à la validation de la tâche.
 - **v1.10** — Mise en forme des notes : gras, italique, souligné, barré, listes (E28). Pas de changement de schéma.
+- **v1.11** — Listes à plusieurs niveaux dans les notes (Tab / Maj+Tab).

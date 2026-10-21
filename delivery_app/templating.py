@@ -84,10 +84,15 @@ def parse_table(spec, variables):
 
 # -- rich text of notes (mirrored in static/app.js) ---------------------------
 #   **gras**  *italique*  __souligné__  ~~barré~~  (\* for a literal star)
-#   lines starting with "- " (or "* ", "• ") form a bullet list, "1. " (or "1) ") a numbered list.
+#   lines starting with "- " (or "* ", "• ") form a bullet list, "1. " (or "1) ") a numbered list;
+#   indenting a list line (a tab, or two spaces, per level) nests it under the line above.
 
-_RICH_UL = re.compile(r"^\s*[-*•]\s+(.*)$")
-_RICH_OL = re.compile(r"^\s*(\d+)[.)]\s+(.*)$")
+_RICH_ITEM = re.compile(r"^([ \t]*)(?:([-*•])|(\d+)[.)])\s+(.*)$")
+RICH_MAX_LEVEL = 5
+
+
+def _indent_level(lead):
+    return lead.count("\t") + lead.count(" ") // 2
 _RICH_TOKEN = re.compile(r"\\([*_~\\])|(\*\*|__|~~|\*)")
 RICH_STYLES = {"**": "b", "*": "i", "__": "u", "~~": "s"}
 
@@ -138,35 +143,47 @@ def _opens(tokens, i):
 
 
 def parse_rich(text):
-    """Blocks of a note: [{"kind": "p"|"ul"|"ol", "start": n, "items": [[(text, styles)], ...]}].
+    """Blocks of a note, in order:
 
-    A paragraph has a single item (its lines joined by newlines); a blank line separates paragraphs.
+    {"kind": "p", "items": [[(text, styles)]]} — a paragraph (its lines joined by newlines);
+    {"kind": "list", "items": [{"level", "kind": "ul"|"ol", "number", "segments"}]} — consecutive
+    list lines, flat with their nesting level (0 = top). A level is at most one more than the item
+    above; numbers restart in each nested list and follow the first number typed.
+    A blank line separates paragraphs and lists.
     """
-    blocks, para = [], []
+    blocks, para, items = [], [], []
 
     def flush():
         if para:
             item = []
             for n, line in enumerate(para):  # styles do not run across lines
                 item += ([("\n", frozenset())] if n else []) + parse_inline(line)
-            blocks.append({"kind": "p", "start": 1, "items": [item]})
+            blocks.append({"kind": "p", "items": [item]})
             para.clear()
+        if items:
+            blocks.append({"kind": "list", "items": list(items)})
+            items.clear()
 
-    in_list = False
+    counters = []  # per level: (kind, last number) of the list open at that level
     for line in (text or "").split("\n"):
-        ul, ol = _RICH_UL.match(line), _RICH_OL.match(line)
-        if ul or ol:
-            flush()
-            kind = "ul" if ul else "ol"
-            item = parse_inline(ul.group(1) if ul else ol.group(2))
-            if in_list and blocks[-1]["kind"] == kind:
-                blocks[-1]["items"].append(item)
+        m = _RICH_ITEM.match(line)
+        if m:
+            if para:
+                flush()
+            level = min(_indent_level(m.group(1)), len(counters), RICH_MAX_LEVEL) if items else 0
+            if not items:
+                counters = []
+            kind = "ul" if m.group(2) else "ol"
+            del counters[level + 1:]
+            if len(counters) > level and counters[level][0] == kind:
+                number = counters[level][1] + 1
             else:
-                blocks.append({"kind": kind, "start": int(ol.group(1)) if ol else 1, "items": [item]})
-            in_list = True
-            continue
-        in_list = False
-        if line.strip():
+                number = int(m.group(3)) if m.group(3) else 1
+            counters[level:] = [(kind, number)]
+            items.append({"level": level, "kind": kind, "number": number, "segments": parse_inline(m.group(4))})
+        elif line.strip():
+            if items:
+                flush()
             para.append(line)
         else:
             flush()

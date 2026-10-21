@@ -458,6 +458,50 @@
     replaceText(ta, a, b, out, out.includes('\n') ? a : a + m.length, out.includes('\n') ? a + out.length : a + out.length - m.length);
   }
 
+  // Tab / Shift+Tab on list lines: one level deeper / shallower. A numbered item takes the number
+  // that follows the previous item of its new level (1 when it starts a nested list).
+  function indentList(ta, dir) {
+    const v = ta.value;
+    const a = ta.selectionStart;
+    const b = ta.selectionEnd;
+    const start = v.lastIndexOf('\n', a - 1) + 1;
+    let end = v.indexOf('\n', b > a && v[b - 1] === '\n' ? b - 1 : b);
+    if (end < 0) end = v.length;
+    const before = v.slice(0, start).split('\n');
+    before.pop(); // the (empty) remainder of the line where the selection starts
+    const lines = v.slice(start, end).split('\n');
+    if (!lines.every((l) => !l.trim() || RICH_ITEM.test(l)) || !lines.some((l) => RICH_ITEM.test(l))) return false;
+    const levelOf = (l) => indentLevel(l.match(RICH_ITEM)[1]);
+    const done = [...before];
+    for (const line of lines) {
+      const m = line.match(RICH_ITEM);
+      if (!m) { done.push(line); continue; }
+      const above = done.length && RICH_ITEM.test(done[done.length - 1]) ? levelOf(done[done.length - 1]) : -1;
+      const deeper = dir > 0 && indentLevel(m[1]) <= above && indentLevel(m[1]) < RICH_MAX_LEVEL;
+      const lead = dir > 0 ? (deeper ? `\t${m[1]}` : m[1]) : m[1].replace(/^(\t| {1,2})/, '');
+      let out = lead + line.slice(m[1].length);
+      if (m[3] && lead !== m[1]) { // renumber
+        const level = indentLevel(lead);
+        let number = 1;
+        for (let k = done.length - 1; k >= 0; k--) {
+          const prev = done[k].match(RICH_ITEM);
+          if (!prev) break;
+          const pl = levelOf(done[k]);
+          if (pl < level) break;
+          if (pl === level) { if (prev[3]) number = Number(prev[3]) + 1; break; }
+        }
+        out = out.replace(/\d+(?=[.)])/, String(number));
+      }
+      done.push(out);
+    }
+    const text = done.slice(before.length).join('\n');
+    if (text === v.slice(start, end)) return true;
+    const single = lines.length === 1;
+    const shift = text.length - (end - start);
+    replaceText(ta, start, end, text, single ? Math.max(start, a + shift) : start, single ? Math.max(start, b + shift) : start + text.length);
+    return true;
+  }
+
   // Enter on a list line starts the next item; on an empty item it ends the list.
   function continueList(ta) {
     const pos = ta.selectionStart;
@@ -480,8 +524,9 @@
   //   **gras** *italique* __souligné__ ~~barré~~, lines "- " = bullet list, "1. " = numbered list.
   const RICH_TOKEN = /\\([*_~\\])|(\*\*|__|~~|\*)/g;
   const RICH_STYLES = { '**': 'b', '*': 'i', __: 'u', '~~': 's' };
-  const RICH_UL = /^\s*[-*•]\s+(.*)$/;
-  const RICH_OL = /^\s*(\d+)[.)]\s+(.*)$/;
+  const RICH_ITEM = /^([ \t]*)(?:([-*•])|(\d+)[.)])\s+(.*)$/;
+  const RICH_MAX_LEVEL = 5;
+  const indentLevel = (lead) => (lead.match(/\t/g) || []).length + Math.floor((lead.match(/ /g) || []).length / 2);
   const isAlnum = (c) => /[\p{L}\p{N}]/u.test(c || '');
   const isSpace = (c) => /\s/.test(c || '');
 
@@ -520,27 +565,32 @@
   function parseRich(text) {
     const blocks = [];
     let para = [];
-    let inList = false;
+    let items = [];
+    let counters = []; // per level: [kind, last number] of the list open at that level
     const flush = () => {
-      if (!para.length) return;
-      blocks.push({ kind: 'p', start: 1, items: [para.flatMap((line, n) => [...(n ? [{ text: '\n', styles: '' }] : []), ...parseInline(line)])] });
-      para = [];
+      if (para.length) {
+        blocks.push({ kind: 'p', items: [para.flatMap((line, n) => [...(n ? [{ text: '\n', styles: '' }] : []), ...parseInline(line)])] });
+        para = [];
+      }
+      if (items.length) { blocks.push({ kind: 'list', items }); items = []; }
     };
     for (const line of (text || '').split('\n')) {
-      const ul = line.match(RICH_UL);
-      const ol = line.match(RICH_OL);
-      if (ul || ol) {
+      const m = line.match(RICH_ITEM);
+      if (m) {
+        if (para.length) flush();
+        if (!items.length) counters = [];
+        const level = items.length ? Math.min(indentLevel(m[1]), counters.length, RICH_MAX_LEVEL) : 0;
+        const kind = m[2] ? 'ul' : 'ol';
+        counters.length = Math.min(counters.length, level + 1);
+        const number = counters.length > level && counters[level][0] === kind ? counters[level][1] + 1 : (m[3] ? Number(m[3]) : 1);
+        counters = [...counters.slice(0, level), [kind, number]];
+        items.push({ level, kind, number, segments: parseInline(m[4]) });
+      } else if (line.trim()) {
+        if (items.length) flush();
+        para.push(line);
+      } else {
         flush();
-        const kind = ul ? 'ul' : 'ol';
-        const item = parseInline(ul ? ul[1] : ol[2]);
-        if (inList && blocks[blocks.length - 1].kind === kind) blocks[blocks.length - 1].items.push(item);
-        else blocks.push({ kind, start: ol ? Number(ol[1]) : 1, items: [item] });
-        inList = true;
-        continue;
       }
-      inList = false;
-      if (line.trim()) para.push(line);
-      else flush();
     }
     flush();
     return blocks;
@@ -550,8 +600,25 @@
   function richHtml(text, vars) {
     const segs = (item) => item.map((sg) => [...sg.styles].reduce(
       (html, st) => `<${RICH_TAGS[st]}>${html}</${RICH_TAGS[st]}>`, renderHtml(sg.text, vars))).join('');
-    return parseRich(text).map((b) => (b.kind === 'p' ? `<p>${segs(b.items[0])}</p>`
-      : `<${b.kind}${b.kind === 'ol' && b.start !== 1 ? ` start="${b.start}"` : ''}>${b.items.map((it) => `<li>${segs(it)}</li>`).join('')}</${b.kind}>`)).join('');
+    const list = (items) => { // flat items with levels -> nested <ul>/<ol>
+      let out = '';
+      const open = []; // [{ kind, level }]
+      const close = () => { out += `</li></${open.pop().kind}>`; };
+      for (const it of items) {
+        while (open.length && open[open.length - 1].level > it.level) close();
+        let top = open[open.length - 1];
+        if (top && top.level === it.level && top.kind !== it.kind) { close(); top = open[open.length - 1]; }
+        if (top && top.level === it.level) out += '</li><li>';
+        else {
+          out += `<${it.kind}${it.kind === 'ol' && it.number !== 1 ? ` start="${it.number}"` : ''}><li>`;
+          open.push({ kind: it.kind, level: it.level });
+        }
+        out += segs(it.segments);
+      }
+      while (open.length) close();
+      return out;
+    };
+    return parseRich(text).map((b) => (b.kind === 'p' ? `<p>${segs(b.items[0])}</p>` : list(b.items))).join('');
   }
 
   const H = { esc, renderHtml, renderText, richHtml, parseTable, cellHtml, mediaStrip };
@@ -943,6 +1010,8 @@
         applyFormat(e.target, key);
       } else if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && continueList(e.target)) {
         e.preventDefault();
+      } else if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && indentList(e.target, e.shiftKey ? -1 : 1)) {
+        e.preventDefault(); // only on list lines: elsewhere Tab still moves the focus
       }
     });
     form.addEventListener('change', (e) => {
