@@ -84,10 +84,12 @@
       isEmpty: (b) => !b.path,
       summary: (b) => b.name || b.path,
       texts: (b) => [b.name, b.path, b.args, b.cwd],
-      view: (b, { vars, h }) => `<div class="program-row">
-          <button class="btn run" data-act="blk-launch">${ICON.play}Lancer ${h.esc(h.renderText(b.name, vars) || 'le programme')}</button>
-          <span class="mono program-cmd">${h.renderHtml(b.path, vars)}${b.args ? ` ${h.renderHtml(b.args, vars)}` : ''}</span>
-        </div>`,
+      view: (b, { vars, h }) => {
+        const cmd = [b.path, b.args].filter(Boolean).map((x) => h.renderText(x, vars)).join(' ');
+        return `<div class="program-row">
+          <button class="btn run" data-act="blk-launch" title="${h.esc(cmd)}">${ICON.play}Lancer ${h.esc(h.renderText(b.name, vars) || 'le programme')}</button>
+        </div>`;
+      },
     },
 
     table: {

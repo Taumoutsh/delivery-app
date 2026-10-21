@@ -83,7 +83,7 @@ facultatif : une tâche peut n'avoir aucun élément. Les éléments vides sont 
 |------|--------|-----------------------------|----------|
 | `command` — Ligne de commande | `label`, `text` (multiligne) | bloc de code + **Copier** | libellé + code |
 | `link` — Lien | `label`, `url` | bouton au libellé (adresse au survol, nouvel onglet) + **Copier le lien** | lien cliquable |
-| `program` — Programme | `name`, `path`, `args`, `cwd` | bouton **Lancer** + ligne résolue | nom + ligne de lancement |
+| `program` — Programme | `name`, `path`, `args`, `cwd` | bouton **Lancer** (ligne résolue au survol) | nom + ligne de lancement |
 | `table` — Tableau pour Word | `title`, `spec` (§2.3) | tableau + **Copier pour Word** / **.docx** | tableau avec liens |
 | `media` — Images et vidéos | `title`, `files` (ids de `media`) | miniatures → visionneuse (lecture vidéo) | images intégrées ; vidéos citées par nom |
 | `note` — Note | `text` | encadré | texte |
@@ -387,3 +387,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.9.1** — Lien : adresse masquée à côté du bouton (visible au survol).
 - **v1.9.2** — Séparateurs entre les éléments d'une tâche (pointillés entre éléments du même type).
 - **v1.9.3** — « Copier pour Word » : copie par événement natif (HTML complet + texte brut), liens collés comme hyperliens.
+- **v1.9.4** — Programme : chemin masqué à côté du bouton « Lancer » (visible au survol).
