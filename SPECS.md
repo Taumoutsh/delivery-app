@@ -82,7 +82,7 @@ facultatif : une tâche peut n'avoir aucun élément. Les éléments vides sont 
 | Type | Champs | Affichage dans la livraison | Rapports |
 |------|--------|-----------------------------|----------|
 | `command` — Ligne de commande | `label`, `text` (multiligne) | bloc de code + **Copier** | libellé + code |
-| `link` — Lien | `label`, `url` | lien cliquable (nouvel onglet) + **Copier le lien** | lien cliquable |
+| `link` — Lien | `label`, `url` | bouton au libellé (adresse au survol, nouvel onglet) + **Copier le lien** | lien cliquable |
 | `program` — Programme | `name`, `path`, `args`, `cwd` | bouton **Lancer** + ligne résolue | nom + ligne de lancement |
 | `table` — Tableau pour Word | `title`, `spec` (§2.3) | tableau + **Copier pour Word** / **.docx** | tableau avec liens |
 | `media` — Images et vidéos | `title`, `files` (ids de `media`) | miniatures → visionneuse (lecture vidéo) | images intégrées ; vidéos citées par nom |
@@ -384,3 +384,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.8** — Variables dans le titre des tâches (livraison, rapports, noms des .docx).
 - **v1.8.1** — Correctif : toutes les vidéos acceptées (AVI, MKV, WMV…), type déduit de l'extension.
 - **v1.9** — Variables composées : une variable peut utiliser d'autres variables (E27). Pas de changement de schéma.
+- **v1.9.1** — Lien : adresse masquée à côté du bouton (visible au survol).

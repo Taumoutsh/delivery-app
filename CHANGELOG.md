@@ -3,6 +3,12 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.9.1 — 2026-10-21
+
+- Élément « Lien » : l'adresse n'est plus affichée à côté du bouton ; seul le libellé reste visible.
+  L'adresse complète apparaît au survol du bouton, et « Copier le lien » copie toujours l'adresse.
+  Un lien sans libellé affiche toujours son adresse sur le bouton.
+
 ## 1.9.0 — 2026-10-21
 
 - **Variables composées** : la valeur d'une variable peut utiliser d'autres variables, intégrées ou

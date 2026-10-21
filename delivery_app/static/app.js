@@ -1089,7 +1089,7 @@
       const { block } = blockOf(el);
       const vars = buildVariables(state.delivery);
       const text = renderText(block.type === 'link' ? block.url : block.text, vars);
-      return copyText(el, text, el.closest('[data-block]').querySelector('pre, .link-url'));
+      return copyText(el, text, el.closest('[data-block]').querySelector('pre, .link-chip span'));
     },
     'blk-launch': async (el) => {
       const { task, block } = blockOf(el);
