@@ -3,6 +3,18 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.9.0 — 2026-10-21
+
+- **Variables composées** : la valeur d'une variable peut utiliser d'autres variables, intégrées ou
+  personnalisées, dans n'importe quel ordre et sur plusieurs niveaux. Exemple dans les variables par
+  défaut : `url_ci = https://ci.example.com/{{env}}/{{version}}`.
+- Les valeurs sont résolues à l'affichage : changer `env` dans une livraison met à jour `url_ci`.
+  Valable partout : tâches, liens, programmes lancés, tableaux Word, rapports PDF/Word (le tableau
+  des variables montre les valeurs résolues).
+- Une variable qui en utilise une inconnue, vide ou en boucle est signalée en rouge, et
+  l'avertissement de la tâche nomme la variable manquante.
+- Aucun changement de format de base.
+
 ## 1.8.1 — 2026-10-21
 
 - Correctif de l'erreur 415 à l'ajout d'une vidéo : tous les formats vidéo sont acceptés (AVI, MKV,

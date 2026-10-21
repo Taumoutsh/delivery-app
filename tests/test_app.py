@@ -225,9 +225,9 @@ class ApiTest(unittest.TestCase):
         script = Path(self.tmp.name) / "outil.sh"
         script.write_text(f'#!/bin/sh\necho "$@" > "{marker}"\n')
         script.chmod(0o755)
-        _, d = self.call("POST", "/api/deliveries", {"version": "7.1.0"})
+        _, d = self.call("POST", "/api/deliveries", {"version": "7.1.0", "variables": {"opts": "--version {{version}}"}})
         _, d = self.call("POST", f"/api/deliveries/{d['id']}/tasks", {"title": "Lancer", "blocks": [
-            {"id": "p1", "type": "program", "name": "Outil", "path": str(script), "args": "--version {{version}}"},
+            {"id": "p1", "type": "program", "name": "Outil", "path": str(script), "args": "{{opts}}"},
             {"id": "p2", "type": "program", "name": "Absent", "path": "/nulle/part/outil"}]})
         task = d["tasks"][-1]
         status, body = self.call("POST", f"/api/delivery-tasks/{task['id']}/blocks/p1/launch")
@@ -428,6 +428,22 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(render_command("v{{version}} {{ major }}.{{minor}} {{env}} {{unknown}}", variables),
                          "v2.4.1 2.4 prod {{unknown}}")
         self.assertEqual(variables["date"], "2026-01-02")
+
+    def test_variables_can_use_other_variables(self):
+        variables = build_variables({"version": "2.4.1", "variables": {
+            "url": "https://{{host}}/app/{{major}}/{{version}}",  # declared before what it uses
+            "host": "{{env}}.example.com", "env": "recette",
+            "loop_a": "a-{{loop_b}}", "loop_b": "b-{{loop_a}}", "self": "x{{self}}",
+            "partial": "{{env}}/{{unknown}}/{{blank}}", "blank": ""}})
+        self.assertEqual(variables["url"], "https://recette.example.com/app/2/2.4.1")
+        self.assertEqual(render_command("curl {{url}}", variables), "curl https://recette.example.com/app/2/2.4.1")
+        # Loops and unknown or empty references stay visible instead of hanging or vanishing.
+        self.assertEqual((variables["loop_a"], variables["loop_b"]), ("a-b-{{loop_a}}", "b-a-{{loop_b}}"))
+        self.assertEqual(variables["self"], "x{{self}}")
+        self.assertEqual(variables["partial"], "recette/{{unknown}}/{{blank}}")
+        # A delivery overriding one variable changes the ones built from it.
+        self.assertEqual(build_variables({"version": "3.0.0", "variables": {"env": "prod", "host": "{{env}}.ex"}})["host"],
+                         "prod.ex")
 
 
 FIXTURES = Path(__file__).parent / "fixtures"

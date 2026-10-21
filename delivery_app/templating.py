@@ -9,7 +9,7 @@ _SEPARATOR = re.compile(r"[\s|:\-]+")
 
 
 def build_variables(delivery):
-    """Built-in variables derived from the delivery, overridden by custom ones."""
+    """Built-in variables derived from the delivery, overridden by custom ones, then resolved."""
     version = delivery["version"]
     parts = re.split(r"[.\-+]", version)
     created = delivery.get("created_at") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -22,7 +22,21 @@ def build_variables(delivery):
         "name": delivery.get("name") or "",
     }
     values.update({k: str(v) for k, v in (delivery.get("variables") or {}).items()})
-    return values
+    return resolve_variables(values)
+
+
+def resolve_variables(values, limit=10000):
+    """Expand {{other}} inside variable values, at any depth and in any order.
+
+    A reference to an unknown or empty variable, or one that loops back (a -> b -> a), is kept as
+    written so that it shows up as unresolved.
+    """
+    def expand(key, stack):
+        def sub(m):
+            k = m.group(1)
+            return m.group(0) if k in stack or not values.get(k) else expand(k, stack | {k})
+        return _PLACEHOLDER.sub(sub, values[key])[:limit]
+    return {k: expand(k, {k}) for k in values}
 
 
 def render_command(text, variables):

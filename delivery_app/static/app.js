@@ -53,16 +53,26 @@
 
   function buildVariables(d) {
     const parts = d.version.split(/[.\-+]/);
-    return {
+    return resolveVariables({
       version: d.version,
       major: parts[0] ?? '', minor: parts[1] ?? '', patch: parts[2] ?? '',
       date: (d.created_at || new Date().toISOString()).slice(0, 10),
       name: d.name || '',
       ...(d.variables || {}),
-    };
+    });
   }
 
   const PLACEHOLDER = /\{\{\s*([\w.-]+)\s*\}\}/g;
+
+  // Expands {{other}} inside variable values (mirror of templating.resolve_variables): a reference
+  // to an unknown or empty variable, or a loop (a -> b -> a), is kept as written.
+  function resolveVariables(values) {
+    const expand = (key, stack) => String(values[key]).replace(PLACEHOLDER, (m, k) => (
+      stack.has(k) || !Object.prototype.hasOwnProperty.call(values, k) || !values[k] ? m : expand(k, new Set([...stack, k])))).slice(0, 10000);
+    return Object.fromEntries(Object.keys(values).map((k) => [k, expand(k, new Set([k]))]));
+  }
+  // Names left unresolved inside a variable's value ("" when complete).
+  const unresolvedIn = (value) => [...String(value ?? '').matchAll(PLACEHOLDER)].map((m) => m[1]);
 
   function renderText(text, vars) {
     return (text || '').replace(PLACEHOLDER, (m, k) => (k in vars ? vars[k] : m));
@@ -74,9 +84,11 @@
     for (const m of (text || '').matchAll(PLACEHOLDER)) {
       out += esc(text.slice(last, m.index));
       const k = m[1];
-      out += k in vars && vars[k] !== ''
-        ? `<span class="var" title="{{${esc(k)}}}">${esc(vars[k])}</span>`
-        : `<span class="var missing" title="Variable non renseignée">${esc(m[0])}</span>`;
+      const inner = k in vars ? unresolvedIn(vars[k]) : [];
+      out += !(k in vars) || vars[k] === ''
+        ? `<span class="var missing" title="Variable non renseignée">${esc(m[0])}</span>`
+        : `<span class="var${inner.length ? ' missing' : ''}" title="{{${esc(k)}}}${inner.length
+          ? ` : ${esc(inner.map((n) => `{{${n}}}`).join(', '))} non résolue` : ''}">${esc(vars[k])}</span>`;
       last = m.index + m[0].length;
     }
     return out + esc((text || '').slice(last));
@@ -130,7 +142,10 @@
 
   function missingVars(text, vars) {
     const out = new Set();
-    for (const m of (text || '').matchAll(PLACEHOLDER)) if (!vars[m[1]]) out.add(m[1]);
+    for (const m of (text || '').matchAll(PLACEHOLDER)) {
+      if (!vars[m[1]]) out.add(m[1]);
+      else unresolvedIn(vars[m[1]]).forEach((k) => out.add(k)); // e.g. {{url}} = https://{{host}}/…
+    }
     return [...out];
   }
 
@@ -331,7 +346,8 @@
 
       <div class="chips">
         <span class="chip">{{version}} = <b>${esc(d.version)}</b></span>
-        ${custom.map(([k, v]) => `<span class="chip">{{${esc(k)}}} = <b>${v ? esc(v) : '<i>vide</i>'}</b></span>`).join('')}
+        ${custom.map(([k, v]) => `<span class="chip${unresolvedIn(vars[k]).length ? ' missing' : ''}"${vars[k] !== v
+          ? ` title="${esc(`${k} = ${v}`)}"` : ''}>{{${esc(k)}}} = <b>${v ? esc(vars[k]) : '<i>vide</i>'}</b></span>`).join('')}
         ${closed ? '' : '<button class="chip edit" data-act="edit-delivery">Modifier les variables</button>'}
       </div>
 
@@ -525,8 +541,9 @@
         </section>
         <section class="panel">
           <h3>Variables par défaut</h3>
-          <p>Pré-remplies à chaque nouvelle livraison (une par ligne, <code>clé = valeur</code>). Utile pour un serveur, un dépôt, un environnement…</p>
-          <textarea id="default-vars" class="mono" rows="5" placeholder="env = recette&#10;registry = registry.local">${esc(varsToText(state.settings.default_variables))}</textarea>
+          <p>Pré-remplies à chaque nouvelle livraison (une par ligne, <code>clé = valeur</code>). Utile pour un serveur, un dépôt, un environnement…
+            Une valeur peut utiliser d'autres variables, dans n'importe quel ordre : <code>url_ci = https://ci.example.com/{{env}}/{{version}}</code>.</p>
+          <textarea id="default-vars" class="mono" rows="5" placeholder="env = recette&#10;registry = registry.local&#10;image = {{registry}}/app:{{version}}">${esc(varsToText(state.settings.default_variables))}</textarea>
           <div><button class="btn" data-act="save-defaults">Enregistrer</button></div>
         </section>
       </div>`;
@@ -829,13 +846,13 @@
         </div>
         <div class="field"><label for="d-vars">Variables personnalisées</label>
           <textarea id="d-vars" name="vars" class="mono" rows="4" placeholder="prev_version = 2.3.1&#10;env = recette">${esc(varsToText(vars))}</textarea>
-          <span class="hint">Une par ligne, <code>clé = valeur</code>. Utilisables dans les commandes sous la forme {{clé}}.</span></div>
+          <span class="hint">Une par ligne, <code>clé = valeur</code>. Utilisables dans les tâches sous la forme {{clé}} ; une valeur peut elle-même utiliser d'autres variables ({{env}}, {{version}}…).</span></div>
         <div class="field"><label>Variables utilisées par les tâches</label><div class="var-preview" data-preview></div></div>`,
       onInput(form) {
         const draft = { version: form.version.value.trim() || '?', name: form.name.value, created_at: existing?.created_at, variables: parseVars(form.vars.value) };
         const v = buildVariables(draft);
         form.querySelector('[data-preview]').innerHTML = used.length
-          ? used.map((k) => `<span class="chip ${v[k] ? '' : 'missing'}">{{${esc(k)}}} = <b>${v[k] ? esc(v[k]) : 'non renseignée'}</b></span>`).join('')
+          ? used.map((k) => `<span class="chip ${v[k] && !unresolvedIn(v[k]).length ? '' : 'missing'}">{{${esc(k)}}} = <b>${v[k] ? esc(v[k]) : 'non renseignée'}</b></span>`).join('')
           : '<span>Aucune variable dans les commandes.</span>';
       },
       async onSubmit(form) {
