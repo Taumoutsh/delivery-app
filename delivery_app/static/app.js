@@ -1057,7 +1057,7 @@
 
   async function postComment(taskId) {
     const ta = document.getElementById(`c-${taskId}`);
-    if (!ta.value.trim()) return;
+    if (!ta || !ta.value.trim()) return;
     const d = await run(API.addComment(taskId, ta.value));
     ta.value = '';
     await setDelivery(d);
@@ -1101,6 +1101,8 @@
     async task(el) {
       const id = Number(el.dataset.id);
       const action = el.dataset.action;
+      // Finishing a task collapses it: publish the comment being typed first so it is not left behind.
+      if (action === 'done' || action === 'skip') await postComment(id);
       const d = await run(API.taskAction(id, action));
       if (action === 'reopen') state.expanded.delete(id);
       if (action === 'done' || action === 'skip') state.expanded.delete(id);

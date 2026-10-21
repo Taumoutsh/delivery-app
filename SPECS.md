@@ -334,7 +334,8 @@ Les mutations d'une livraison renvoient la livraison complète (l'UI se re-rend 
   Démarrer/Pause, Valider, menu (modifier, non applicable, monter/descendre, remise à zéro, retirer),
   replier/déplier. Corps : description, éléments dans leur ordre (titre de type affiché une fois par
   suite d'éléments du même type), captures de la livraison, commentaires (Ctrl+Entrée pour publier,
-  Ctrl+V pour coller une capture).
+  Ctrl+V pour coller une capture ; un commentaire en cours de saisie est publié automatiquement quand
+  on valide la tâche ou la marque non applicable).
 - **Éditeur de tâche** (modèle et livraison) : fenêtre large, section « Général » (titre, temps
   estimé, description), section « Contenu » (cartes repliables avec type, résumé, ⠿ pour glisser,
   ↑ ↓, supprimer ; repliées par défaut au-delà de 3 éléments), boutons « Ajouter » par type, aide sur
@@ -388,3 +389,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.9.2** — Séparateurs entre les éléments d'une tâche (pointillés entre éléments du même type).
 - **v1.9.3** — « Copier pour Word » : copie par événement natif (HTML complet + texte brut), liens collés comme hyperliens.
 - **v1.9.4** — Programme : chemin masqué à côté du bouton « Lancer » (visible au survol).
+- **v1.9.5** — Commentaire en cours de saisie publié à la validation de la tâche.
