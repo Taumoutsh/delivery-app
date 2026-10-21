@@ -35,6 +35,7 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E24 | Titre « Checklist Livraison » modifiable | ✅ v1.6 (réglage `app_title`) |
 | E25 | Version de l'application visible | ✅ v1.6 (barre latérale, fenêtre « Application », rapports) |
 | E26 | Livraison clôturée non modifiable, sauf si elle est rouverte | ✅ v1.7 (serveur + interface) |
+| E27 | Variables par défaut pouvant utiliser d'autres variables | ✅ v1.9 (§2.1) |
 
 ## 2. Concepts
 
@@ -63,6 +64,15 @@ rapports. Une variable inconnue reste telle quelle et est signalée (soulignée 
 | personnalisées | définies par livraison (`clé = valeur`), pré-remplies depuis les « variables par défaut » du modèle |
 
 Les variables personnalisées surchargent les variables intégrées.
+
+**Variables composées** (v1.9) : la valeur d'une variable peut utiliser d'autres variables, intégrées
+ou personnalisées, à n'importe quelle profondeur et dans n'importe quel ordre
+(`url_ci = https://ci.example.com/{{env}}/{{version}}`). La résolution se fait à l'affichage et à
+l'export (`templating.resolve_variables`, reproduite dans `app.js`) : seules les valeurs saisies sont
+stockées, donc changer `env` dans une livraison change aussi `url_ci`. Une référence inconnue, vide
+ou en boucle (`a → b → a`) reste écrite telle quelle dans la valeur ; la variable est alors signalée
+en rouge et la variable manquante apparaît dans l'avertissement de la tâche. Le tableau des variables
+des rapports montre les valeurs résolues.
 
 ### 2.2 Éléments de tâche (registre extensible)
 
@@ -373,3 +383,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
   chronos en pause. Pas de changement de schéma.
 - **v1.8** — Variables dans le titre des tâches (livraison, rapports, noms des .docx).
 - **v1.8.1** — Correctif : toutes les vidéos acceptées (AVI, MKV, WMV…), type déduit de l'extension.
+- **v1.9** — Variables composées : une variable peut utiliser d'autres variables (E27). Pas de changement de schéma.

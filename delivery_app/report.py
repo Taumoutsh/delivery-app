@@ -49,8 +49,9 @@ def _summary(delivery):
         ("Tâches", f"{done} validées, {skipped} non applicables, {len(tasks)} au total"),
         ("Temps", f"{fmt_duration(spent)} passé / {fmt_duration(estimated)} estimé"),
     ]
-    info += [(f"{{{{{k}}}}}", v) for k, v in delivery["variables"].items()]
-    return build_variables(delivery), info
+    variables = build_variables(delivery)
+    info += [(f"{{{{{k}}}}}", variables[k]) for k in delivery["variables"]]
+    return variables, info
 
 
 def _app_label(db):
