@@ -3,6 +3,15 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.8.1 — 2026-10-21
+
+- Correctif de l'erreur 415 à l'ajout d'une vidéo : tous les formats vidéo sont acceptés (AVI, MKV,
+  WMV, MPEG…, plus seulement MP4/WebM/Ogg/MOV) ; quand le navigateur ne fournit pas le type du
+  fichier, il est déduit de l'extension (ces fichiers étaient auparavant ignorés sans message).
+- Un format que le navigateur ne sait pas lire est proposé en téléchargement dans la visionneuse.
+- Message d'erreur explicite (nom du fichier, formats acceptés) ; déposer une vidéo dans les
+  captures d'une livraison indique d'utiliser un élément « Images et vidéos ».
+
 ## 1.8.0 — 2026-10-21
 
 - Les variables (`{{version}}`, `{{env}}`…) sont aussi remplacées dans le **titre** des tâches : dans

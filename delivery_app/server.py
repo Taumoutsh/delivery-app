@@ -19,7 +19,11 @@ MAX_IMAGE = 15 * 1024 * 1024
 MAX_VIDEO = 200 * 1024 * 1024
 MAX_JSON = 2 * 1024 * 1024
 IMAGE_TYPES = {"image/png", "image/jpeg"}  # the UI converts GIF/WebP/BMP to PNG before upload
-VIDEO_TYPES = {"video/mp4", "video/webm", "video/ogg", "video/quicktime"}
+# Any video/* is accepted and stored as is; the browser plays MP4, WebM, Ogg (and often MOV),
+# other formats (AVI, WMV, MKV…) are offered for download from the viewer instead.
+VIDEO_EXTENSIONS = {".mp4": "video/mp4", ".m4v": "video/x-m4v", ".webm": "video/webm", ".ogv": "video/ogg",
+                    ".mov": "video/quicktime", ".avi": "video/x-msvideo", ".wmv": "video/x-ms-wmv",
+                    ".mkv": "video/x-matroska", ".mpg": "video/mpeg", ".mpeg": "video/mpeg", ".3gp": "video/3gpp"}
 # Header every API call of the UI sends. A web page from another site cannot add it without a CORS
 # preflight, which this server never grants: it protects state changes and program launches.
 CSRF_HEADER = "X-Checklist"
@@ -191,21 +195,28 @@ def delete_comment(h, comment_id):
     return found(h.db.delete_comment(int(comment_id)))
 
 
-def uploaded_file(h, allowed, limit):
-    """(filename, mime, data) of a raw file upload."""
-    mime = (h.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-    if mime not in allowed:
-        raise HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
-                        "Formats acceptés : PNG, JPEG" + (", MP4, WebM, Ogg, MOV." if VIDEO_TYPES & allowed else "."))
-    if mime in VIDEO_TYPES:
-        limit = MAX_VIDEO
+def uploaded_file(h, videos=False):
+    """(filename, mime, data) of a raw file upload: PNG/JPEG images, and any video when videos=True.
+
+    Browsers send no type (or application/octet-stream) for some files, e.g. .mkv on Windows:
+    the type is then deduced from the file name.
+    """
     filename = unquote(h.headers.get("X-Filename") or "fichier")[:200]
-    return filename, mime, h.body(limit)
+    mime = (h.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+    if mime in ("", "application/octet-stream"):
+        suffix = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+        mime = VIDEO_EXTENSIONS.get(suffix) or mimetypes.guess_type(filename)[0] or mime
+    is_video = mime.startswith("video/")
+    if mime not in IMAGE_TYPES and not (videos and is_video):
+        accepted = "images PNG ou JPEG" + (" et vidéos (MP4, WebM, MOV, AVI, MKV…)" if videos else "")
+        raise HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                        f"Format non pris en charge pour « {filename} » ({mime or 'type inconnu'}) : {accepted}.")
+    return filename, mime, h.body(MAX_VIDEO if is_video else MAX_IMAGE)
 
 
 @route("POST", r"/api/delivery-tasks/(\d+)/images")
 def upload_image(h, task_id):
-    return found(h.db.add_image(int(task_id), *uploaded_file(h, IMAGE_TYPES, MAX_IMAGE)))
+    return found(h.db.add_image(int(task_id), *uploaded_file(h)))
 
 
 @route("POST", r"/api/images/(\d+)/to-template")
@@ -216,7 +227,7 @@ def image_to_template(h, image_id):
 @route("POST", r"/api/media")
 def upload_media(h):
     """File of a media block (image or video), attached when the task is saved."""
-    return h.db.add_media(*uploaded_file(h, IMAGE_TYPES | VIDEO_TYPES, MAX_IMAGE))
+    return h.db.add_media(*uploaded_file(h, videos=True))
 
 
 @route("GET", r"/api/media/(\d+)")
