@@ -429,4 +429,6 @@ html.modal-open, html.modal-open body, html.modal-open .main { overflow: hidden;
   .ed-sum { display: none; }
   .ed-card-head .btn.icon { padding: 6px 5px; }
 }
-.blk.cont { margin-top: -6px; }
+/* Thin separator between the elements of a task; dashed within a run of the same type. */
+.blocks > .blk + .blk { border-top: 1px solid var(--line); padding-top: 14px; }
+.blocks > .blk + .blk.cont { border-top-style: dashed; }
