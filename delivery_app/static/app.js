@@ -391,7 +391,170 @@
   const isVideo = (f) => String(f.mime || '').startsWith('video/');
 
   // Helpers handed to block types (blocks.js).
-  const H = { esc, renderHtml, renderText, parseTable, cellHtml, mediaStrip };
+  // -- note editing: toolbar and shortcuts write the markup understood by parseRich.
+
+  // Replaces [a, b) keeping the browser's undo history when possible, then selects [selA, selB).
+  function replaceText(ta, a, b, text, selA, selB) {
+    ta.focus();
+    ta.setSelectionRange(a, b);
+    let done = false;
+    try { done = document.execCommand('insertText', false, text); } catch { done = false; }
+    if (!done || ta.value.slice(a, a + text.length) !== text) {
+      ta.setRangeText(text, a, b, 'end');
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    ta.setSelectionRange(selA, selB);
+  }
+
+  const MARKERS = { b: '**', i: '*', u: '__', s: '~~' };
+  const LIST_PREFIX = /^(\s*)([-*•]|\d+[.)])\s+/;
+
+  function applyFormat(ta, fmt) {
+    if (!ta) return;
+    let a = ta.selectionStart;
+    let b = ta.selectionEnd;
+    const v = ta.value;
+    if (fmt === 'ul' || fmt === 'ol') {
+      // Whole lines covered by the selection; toggles the list off when every line already has it.
+      const start = v.lastIndexOf('\n', a - 1) + 1;
+      let end = v.indexOf('\n', b > a && v[b - 1] === '\n' ? b - 1 : b);
+      if (end < 0) end = v.length;
+      const lines = v.slice(start, end).split('\n');
+      const isKind = (l) => (fmt === 'ul' ? /^\s*[-*•]\s+/ : /^\s*\d+[.)]\s+/).test(l);
+      const off = lines.every((l) => !l.trim() || isKind(l));
+      let n = 0;
+      const out = lines.map((l) => {
+        if (!l.trim()) return l;
+        const bare = l.replace(LIST_PREFIX, '$1');
+        if (off) return bare;
+        n += 1;
+        return bare.replace(/^(\s*)/, `$1${fmt === 'ul' ? '- ' : `${n}. `}`);
+      }).join('\n');
+      replaceText(ta, start, end, out, start, start + out.length);
+      return;
+    }
+    const m = MARKERS[fmt];
+    // Leave surrounding spaces outside the markers ("**mot** " not "**mot **").
+    while (a < b && /\s/.test(v[a])) a += 1;
+    while (b > a && /\s/.test(v[b - 1])) b -= 1;
+    if (v.slice(a - m.length, a) === m && v.slice(b, b + m.length) === m
+        && !(m === '*' && (v[a - 2] === '*' || v[b + 1] === '*'))) { // already formatted: remove
+      replaceText(ta, a - m.length, b + m.length, v.slice(a, b), a - m.length, b - m.length);
+      return;
+    }
+    if (a === b) { // nothing selected: insert the pair and type in between
+      replaceText(ta, a, b, m + m, a + m.length, a + m.length);
+      return;
+    }
+    // Styles stop at line ends: wrap each line of the selection.
+    const out = v.slice(a, b).split('\n').map((l) => {
+      const t = l.trim();
+      if (!t) return l;
+      const lead = l.slice(0, l.indexOf(t));
+      const prefix = (lead + t).match(LIST_PREFIX)?.[0] || lead;
+      const body = (lead + t).slice(prefix.length);
+      return body ? `${prefix}${m}${body}${m}${l.slice(l.indexOf(t) + t.length)}` : l;
+    }).join('\n');
+    replaceText(ta, a, b, out, out.includes('\n') ? a : a + m.length, out.includes('\n') ? a + out.length : a + out.length - m.length);
+  }
+
+  // Enter on a list line starts the next item; on an empty item it ends the list.
+  function continueList(ta) {
+    const pos = ta.selectionStart;
+    if (pos !== ta.selectionEnd) return false;
+    const v = ta.value;
+    const start = v.lastIndexOf('\n', pos - 1) + 1;
+    const line = v.slice(start, pos);
+    const m = line.match(/^(\s*)([-*•]|(\d+)([.)]))\s+/);
+    if (!m) return false;
+    if (!line.slice(m[0].length).trim() && !v.slice(pos).split('\n')[0].trim()) {
+      replaceText(ta, start, pos, '', start, start);
+      return true;
+    }
+    const next = m[3] ? `${m[1]}${Number(m[3]) + 1}${m[4]} ` : `${m[1]}${m[2]} `;
+    replaceText(ta, pos, pos, `\n${next}`, pos + next.length + 1, pos + next.length + 1);
+    return true;
+  }
+
+  // Rich text of notes (mirror of templating.parse_inline / parse_rich):
+  //   **gras** *italique* __souligné__ ~~barré~~, lines "- " = bullet list, "1. " = numbered list.
+  const RICH_TOKEN = /\\([*_~\\])|(\*\*|__|~~|\*)/g;
+  const RICH_STYLES = { '**': 'b', '*': 'i', __: 'u', '~~': 's' };
+  const RICH_UL = /^\s*[-*•]\s+(.*)$/;
+  const RICH_OL = /^\s*(\d+)[.)]\s+(.*)$/;
+  const isAlnum = (c) => /[\p{L}\p{N}]/u.test(c || '');
+  const isSpace = (c) => /\s/.test(c || '');
+
+  function parseInline(text) {
+    const tokens = [];
+    let last = 0;
+    for (const m of text.matchAll(RICH_TOKEN)) {
+      if (m.index > last) tokens.push([false, text.slice(last, m.index)]);
+      tokens.push(m[1] !== undefined ? [false, m[1]] : [true, m[2]]);
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) tokens.push([false, text.slice(last)]);
+    const txt = (k) => (k < 0 || k >= tokens.length || tokens[k][0] ? '' : tokens[k][1]);
+    const opens = (i) => {
+      if (isAlnum(txt(i - 1).slice(-1)) || i + 1 >= tokens.length || isSpace(txt(i + 1)[0])) return false;
+      for (let j = i + 2; j < tokens.length; j++) {
+        if (tokens[j][0] && tokens[j][1] === tokens[i][1] && !isSpace(txt(j - 1).slice(-1)) && !isAlnum(txt(j + 1)[0])) return true;
+      }
+      return false;
+    };
+    const out = [];
+    const active = new Set();
+    tokens.forEach(([marker, value], i) => {
+      if (marker) {
+        const style = RICH_STYLES[value];
+        if (active.has(style)) { active.delete(style); return; }
+        if (opens(i)) { active.add(style); return; }
+      }
+      const styles = [...active].sort().join('');
+      if (out.length && out[out.length - 1].styles === styles) out[out.length - 1].text += value;
+      else out.push({ text: value, styles });
+    });
+    return out;
+  }
+
+  function parseRich(text) {
+    const blocks = [];
+    let para = [];
+    let inList = false;
+    const flush = () => {
+      if (!para.length) return;
+      blocks.push({ kind: 'p', start: 1, items: [para.flatMap((line, n) => [...(n ? [{ text: '\n', styles: '' }] : []), ...parseInline(line)])] });
+      para = [];
+    };
+    for (const line of (text || '').split('\n')) {
+      const ul = line.match(RICH_UL);
+      const ol = line.match(RICH_OL);
+      if (ul || ol) {
+        flush();
+        const kind = ul ? 'ul' : 'ol';
+        const item = parseInline(ul ? ul[1] : ol[2]);
+        if (inList && blocks[blocks.length - 1].kind === kind) blocks[blocks.length - 1].items.push(item);
+        else blocks.push({ kind, start: ol ? Number(ol[1]) : 1, items: [item] });
+        inList = true;
+        continue;
+      }
+      inList = false;
+      if (line.trim()) para.push(line);
+      else flush();
+    }
+    flush();
+    return blocks;
+  }
+
+  const RICH_TAGS = { b: 'strong', i: 'em', u: 'u', s: 's' };
+  function richHtml(text, vars) {
+    const segs = (item) => item.map((sg) => [...sg.styles].reduce(
+      (html, st) => `<${RICH_TAGS[st]}>${html}</${RICH_TAGS[st]}>`, renderHtml(sg.text, vars))).join('');
+    return parseRich(text).map((b) => (b.kind === 'p' ? `<p>${segs(b.items[0])}</p>`
+      : `<${b.kind}${b.kind === 'ol' && b.start !== 1 ? ` start="${b.start}"` : ''}>${b.items.map((it) => `<li>${segs(it)}</li>`).join('')}</${b.kind}>`)).join('');
+  }
+
+  const H = { esc, renderHtml, renderText, richHtml, parseTable, cellHtml, mediaStrip };
 
   function blockBadges(blocks) {
     const counts = {};
@@ -759,6 +922,8 @@
         card.remove();
         sync();
         counts();
+      } else if (action === 'fmt') {
+        applyFormat(card.querySelector('textarea[data-rich]'), btn.dataset.fmt);
       } else if (action === 'media-add') {
         card.querySelector('[data-ed-upload]').click();
       } else if (action === 'media-remove') {
@@ -766,6 +931,18 @@
         const b = ed.blocks.find((x) => x.id === card.dataset.card);
         b.files = b.files.filter((f) => String(f.id) !== btn.dataset.file);
         refresh();
+      }
+    });
+    // Keep the text selection when a formatting button is pressed.
+    form.addEventListener('mousedown', (e) => { if (e.target.closest('[data-ed="fmt"]')) e.preventDefault(); });
+    form.addEventListener('keydown', (e) => {
+      if (!e.target.matches('textarea[data-rich]')) return;
+      const key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && ['b', 'i', 'u'].includes(key)) {
+        e.preventDefault();
+        applyFormat(e.target, key);
+      } else if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && continueList(e.target)) {
+        e.preventDefault();
       }
     });
     form.addEventListener('change', (e) => {

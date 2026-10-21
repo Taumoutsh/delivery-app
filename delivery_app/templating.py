@@ -80,3 +80,95 @@ def parse_table(spec, variables):
     width = max(len(r) for r in rows)
     rows = [r + [[] for _ in range(width - len(r))] for r in rows]
     return {"headers": rows[0], "rows": rows[1:]}
+
+
+# -- rich text of notes (mirrored in static/app.js) ---------------------------
+#   **gras**  *italique*  __souligné__  ~~barré~~  (\* for a literal star)
+#   lines starting with "- " (or "* ", "• ") form a bullet list, "1. " (or "1) ") a numbered list.
+
+_RICH_UL = re.compile(r"^\s*[-*•]\s+(.*)$")
+_RICH_OL = re.compile(r"^\s*(\d+)[.)]\s+(.*)$")
+_RICH_TOKEN = re.compile(r"\\([*_~\\])|(\*\*|__|~~|\*)")
+RICH_STYLES = {"**": "b", "*": "i", "__": "u", "~~": "s"}
+
+
+def parse_inline(text):
+    """[(text, styles)] where styles is a frozenset of 'b', 'i', 'u', 's'.
+
+    A marker opens a style only when it is followed by a non-space and the same marker closes it
+    further on the line, right after a non-space; otherwise it is kept as typed ("rm *.log").
+    """
+    tokens, last = [], 0
+    for m in _RICH_TOKEN.finditer(text):
+        if m.start() > last:
+            tokens.append((False, text[last:m.start()]))
+        tokens.append((False, m.group(1)) if m.group(1) else (True, m.group(2)))
+        last = m.end()
+    if last < len(text):
+        tokens.append((False, text[last:]))
+    out, active = [], set()
+    for i, (marker, value) in enumerate(tokens):
+        if marker:
+            style = RICH_STYLES[value]
+            if style in active:
+                active.discard(style)
+                continue
+            if _opens(tokens, i):
+                active.add(style)
+                continue
+        styles = frozenset(active)
+        if out and out[-1][1] == styles:
+            out[-1] = (out[-1][0] + value, styles)
+        else:
+            out.append((value, styles))
+    return out
+
+
+def _opens(tokens, i):
+    """Marker i opens a span: not glued to a word before it ("prev__version"), followed by a
+    non-space, and closed later by the same marker preceded by a non-space and not glued to a word after."""
+    def text(k):
+        return "" if k < 0 or k >= len(tokens) or tokens[k][0] else tokens[k][1]
+    if text(i - 1)[-1:].isalnum() or i + 1 >= len(tokens) or text(i + 1)[:1].isspace():
+        return False
+    for j in range(i + 2, len(tokens)):
+        if tokens[j] == tokens[i] and not text(j - 1)[-1:].isspace() and not text(j + 1)[:1].isalnum():
+            return True
+    return False
+
+
+def parse_rich(text):
+    """Blocks of a note: [{"kind": "p"|"ul"|"ol", "start": n, "items": [[(text, styles)], ...]}].
+
+    A paragraph has a single item (its lines joined by newlines); a blank line separates paragraphs.
+    """
+    blocks, para = [], []
+
+    def flush():
+        if para:
+            item = []
+            for n, line in enumerate(para):  # styles do not run across lines
+                item += ([("\n", frozenset())] if n else []) + parse_inline(line)
+            blocks.append({"kind": "p", "start": 1, "items": [item]})
+            para.clear()
+
+    in_list = False
+    for line in (text or "").split("\n"):
+        ul, ol = _RICH_UL.match(line), _RICH_OL.match(line)
+        if ul or ol:
+            flush()
+            kind = "ul" if ul else "ol"
+            item = parse_inline(ul.group(1) if ul else ol.group(2))
+            if in_list and blocks[-1]["kind"] == kind:
+                blocks[-1]["items"].append(item)
+            else:
+                blocks.append({"kind": kind, "start": int(ol.group(1)) if ol else 1, "items": [item]})
+            in_list = True
+            continue
+        in_list = False
+        if line.strip():
+            para.append(line)
+        else:
+            flush()
+    flush()
+    return blocks

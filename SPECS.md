@@ -36,6 +36,7 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E25 | Version de l'application visible | ✅ v1.6 (barre latérale, fenêtre « Application », rapports) |
 | E26 | Livraison clôturée non modifiable, sauf si elle est rouverte | ✅ v1.7 (serveur + interface) |
 | E27 | Variables par défaut pouvant utiliser d'autres variables | ✅ v1.9 (§2.1) |
+| E28 | Notes : gras, italique, souligné, barré, listes à puces et numérotées | ✅ v1.10 (§2.3 bis) |
 
 ## 2. Concepts
 
@@ -86,7 +87,7 @@ facultatif : une tâche peut n'avoir aucun élément. Les éléments vides sont 
 | `program` — Programme | `name`, `path`, `args`, `cwd` | bouton **Lancer** (ligne résolue au survol) | nom + ligne de lancement |
 | `table` — Tableau pour Word | `title`, `spec` (§2.3) | tableau + **Copier pour Word** / **.docx** | tableau avec liens |
 | `media` — Images et vidéos | `title`, `files` (ids de `media`) | miniatures → visionneuse (lecture vidéo) | images intégrées ; vidéos citées par nom |
-| `note` — Note | `text` | encadré | texte |
+| `note` — Note | `text` (mise en forme §2.3 bis) | encadré mis en forme | gras/italique/souligné/barré, listes |
 
 **Ajouter un type** (prévu par l'architecture) :
 1. `static/blocks.js` : une entrée dans `TYPES` (libellé, icône, champs vides, éditeur, lecture,
@@ -96,6 +97,29 @@ facultatif : une tâche peut n'avoir aucun élément. Les éléments vides sont 
    absent des rapports) ;
 4. si le type a besoin d'une action serveur (comme `program`), une route dédiée.
 Aucune migration de base n'est nécessaire pour un nouveau type.
+
+### 2.3 bis Mise en forme des notes (v1.10)
+
+Le texte d'une note reste du texte brut stocké tel quel (aucun changement de schéma) ; une syntaxe
+légère est interprétée à l'affichage et dans les rapports (`templating.parse_rich`, reproduite dans
+`app.js`) :
+
+| Saisie | Rendu |
+|---|---|
+| `**texte**` / `*texte*` / `__texte__` / `~~texte~~` | gras / italique / souligné / barré (combinables) |
+| ligne `- `, `* ` ou `• ` | élément de liste à puces |
+| ligne `1. ` ou `1) ` | élément de liste numérotée (commence au premier numéro saisi) |
+| ligne vide | nouveau paragraphe |
+| `\*` | astérisque littéral |
+
+- Un marqueur ne met en forme que s'il est refermé sur la même ligne, collé au texte (`**mot**`, pas
+  `** mot **`) et pas au milieu d'un mot : `rm *.log`, `2 * 3`, `{{prev_version}}` restent intacts.
+- Les variables sont remplacées après l'analyse : une valeur contenant `*` n'est pas interprétée.
+- Éditeur : barre G / I / S / B / puces / numéros (sur la sélection, ou bascule si déjà appliqué),
+  Ctrl+B / Ctrl+I / Ctrl+U, Entrée qui prolonge une liste (Entrée sur un élément vide la termine).
+- Rapports : Word en runs `w:b`, `w:i`, `w:u`, `w:strike` et paragraphes en retrait avec puce ou
+  numéro ; PDF avec Helvetica gras/oblique/gras-oblique, traits de soulignement et de barré, puces
+  et numéros en retrait.
 
 ### 2.3 Tableaux pour Word
 
@@ -390,3 +414,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.9.3** — « Copier pour Word » : copie par événement natif (HTML complet + texte brut), liens collés comme hyperliens.
 - **v1.9.4** — Programme : chemin masqué à côté du bouton « Lancer » (visible au survol).
 - **v1.9.5** — Commentaire en cours de saisie publié à la validation de la tâche.
+- **v1.10** — Mise en forme des notes : gras, italique, souligné, barré, listes (E28). Pas de changement de schéma.

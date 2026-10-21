@@ -78,7 +78,8 @@ class Docx:
         self.rels.append((rid, kind, target, external))
         return rid
 
-    def run(self, text, bold=False, italic=False, mono=False, color=None, size=None, style=None):
+    def run(self, text, bold=False, italic=False, mono=False, color=None, size=None, style=None,
+            underline=False, strike=False):
         props = ""
         if style:
             props += f'<w:rStyle w:val="{style}"/>'
@@ -88,10 +89,14 @@ class Docx:
             props += "<w:b/>"
         if italic:
             props += "<w:i/>"
+        if strike:
+            props += "<w:strike/>"
         if color:
             props += f'<w:color w:val="{color}"/>'
         if size:
             props += f'<w:sz w:val="{int(size * 2)}"/><w:szCs w:val="{int(size * 2)}"/>'
+        if underline:
+            props += '<w:u w:val="single"/>'
         lines = str(text).split("\n")
         content = "<w:br/>".join(f'<w:t xml:space="preserve">{x(line)}</w:t>' for line in lines)
         return f"<w:r>{f'<w:rPr>{props}</w:rPr>' if props else ''}{content}</w:r>"
@@ -106,7 +111,7 @@ class Docx:
 
     # -- blocks ---------------------------------------------------------
 
-    def paragraph(self, runs, style=None, keep_next=False, after=None):
+    def paragraph(self, runs, style=None, keep_next=False, after=None, indent=None, hanging=None):
         props = ""
         if style:
             props += f'<w:pStyle w:val="{style}"/>'
@@ -114,6 +119,9 @@ class Docx:
             props += "<w:keepNext/>"
         if after is not None:
             props += f'<w:spacing w:after="{after}"/>'
+        if indent is not None:
+            hang = f' w:hanging="{hanging}"' if hanging else ""
+            props += f'<w:ind w:left="{indent}"{hang}/>'
         if isinstance(runs, str) and not runs.startswith("<w:"):
             runs = self.run(runs)
         self.body.append(f"<w:p>{f'<w:pPr>{props}</w:pPr>' if props else ''}{''.join(runs)}</w:p>")

@@ -3,6 +3,17 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.10.0 — 2026-10-21
+
+- **Mise en forme des notes** : gras, italique, souligné, barré, listes à puces et listes
+  numérotées. Barre de boutons au-dessus du texte (sur la sélection ; un second clic retire la
+  mise en forme), raccourcis Ctrl+B / Ctrl+I / Ctrl+U, et Entrée qui prolonge une liste.
+- Syntaxe lisible même en texte brut : `**gras**`, `*italique*`, `__souligné__`, `~~barré~~`,
+  lignes `- ` et `1. `. Les notes existantes s'affichent comme avant (un `*` isolé, `rm *.log`
+  ou `{{prev_version}}` ne sont pas transformés).
+- Rendu identique dans la livraison et dans les rapports PDF et Word.
+- Aucun changement de format de base.
+
 ## 1.9.5 — 2026-10-21
 
 - Valider une tâche (bouton « Valider » ou coche) ou la marquer non applicable publie d'abord le
