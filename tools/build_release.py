@@ -33,7 +33,8 @@ Prérequis : Python 3.8 ou plus récent. Aucune autre dépendance, aucun accès 
 1. Copier `checklist-livraison.pyz` (et éventuellement `lancer.bat` / `lancer.sh`) dans un dossier, par
    exemple `C:\\outils\\checklist\\` ou `~/outils/checklist/`.
 2. Lancer : `python checklist-livraison.pyz` (ou double-clic sur `lancer.bat`).
-3. Le navigateur s'ouvre sur http://localhost:8765. La base est créée dans `data/` à côté du fichier.
+3. Le navigateur s'ouvre sur http://localhost:8765. La base est créée dans `data/` à côté du fichier
+   (`data/delivery.db`, et les vidéos dans `data/media/`). Pour sauvegarder, copier tout le dossier `data/`.
 
 Options : `--port 9000`, `--data CHEMIN`, `--no-browser`, `--version`.
 

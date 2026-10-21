@@ -179,7 +179,7 @@ class ApiTest(unittest.TestCase):
     def test_storage_api(self):
         status, report = self.call("GET", "/api/storage")
         self.assertEqual(status, 200)
-        self.assertEqual(set(report), {"file_bytes", "journal_bytes", "content", "reclaimable", "backups"})
+        self.assertEqual(set(report), {"file_bytes", "journal_bytes", "media_folder_bytes", "content", "reclaimable", "backups"})
         self.assertEqual(self.call("POST", "/api/storage/cleanup", {}, app=False)[0], 403)
         status, report = self.call("POST", "/api/storage/cleanup", {})
         self.assertEqual(status, 200)
@@ -520,6 +520,78 @@ class StorageTest(unittest.TestCase):
         self.assertEqual(result["backups"], [])
 
 
+class VideoFolderTest(unittest.TestCase):
+    """Videos live in data/media (schema v6), images stay in the database."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "delivery.db"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_videos_of_older_databases_move_to_the_media_folder(self):
+        path = load_fixture(5, self.tmp.name)
+        video = os.urandom(300_000)
+        raw = sqlite3.connect(str(path))
+        with raw:
+            media_id = raw.execute("INSERT INTO media (filename, mime, size, data, created_at) VALUES (?,?,?,?,?)",
+                                   ("démo.mp4", "video/mp4", len(video), video, "2026-01-01T00:00:00Z")).lastrowid
+            task_id, blocks = raw.execute("SELECT id, blocks FROM template_tasks ORDER BY id LIMIT 1").fetchone()
+            raw.execute("UPDATE template_tasks SET blocks=? WHERE id=?", (json.dumps(json.loads(blocks) + [
+                {"id": "v", "type": "media", "title": "", "files": [media_id]}]), task_id))
+        raw.close()
+        db = Database(path)
+        try:
+            row = db.get_media(media_id)
+            self.assertEqual((bytes(row["data"]), row["path"].read_bytes()), (b"", video))
+            self.assertEqual(row["path"].parent, Path(self.tmp.name) / "media")
+            self.assertTrue(row["file"].endswith(".mp4"))
+            self.assertTrue(db.backup_path.exists())
+            images = db.conn.execute("SELECT COUNT(*) FROM media WHERE file='' AND length(data) > 0").fetchone()[0]
+            self.assertGreater(images, 0)  # images stay in the database
+        finally:
+            db.conn.close()
+
+    def test_upload_serve_dedup_and_cleanup(self):
+        db = Database(self.path)
+        server = make_server(db, "127.0.0.1", 0)
+        server.RequestHandlerClass.log_message = lambda *args: None
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+
+        def upload(data, name="clip.mkv", mime="video/x-matroska"):
+            req = urllib.request.Request(base + "/api/media", data=data, method="POST", headers={
+                "X-Checklist": "1", "Content-Type": mime, "X-Filename": name})
+            with urllib.request.urlopen(req) as res:
+                return json.loads(res.read())
+        try:
+            video = os.urandom(3_000_000)
+            first, second = upload(video), upload(video, name="copie.mkv")
+            files = [f for f in (Path(self.tmp.name) / "media").iterdir()]
+            self.assertEqual(len(files), 1)  # same content stored once
+            self.assertEqual(files[0].read_bytes(), video)
+            self.assertEqual(db.conn.execute("SELECT SUM(length(data)) FROM media WHERE file != ''").fetchone()[0], 0)
+            self.assertEqual(second["filename"], "copie.mkv")
+            req = urllib.request.Request(base + first["url"], headers={"Range": "bytes=1000-1999"})
+            with urllib.request.urlopen(req) as res:
+                self.assertEqual((res.status, res.read()), (206, video[1000:2000]))
+                self.assertEqual(res.headers["Content-Range"], f"bytes 1000-1999/{len(video)}")
+            with urllib.request.urlopen(base + first["url"]) as res:
+                self.assertEqual(res.read(), video)
+            self.assertEqual(db.storage()["content"][1]["bytes"], len(video))
+
+            # Removing every reference (and the grace delay) removes the file too.
+            db.conn.execute("UPDATE media SET created_at='2026-01-01T00:00:00Z'")
+            db.conn.commit()
+            db.collect_media(0)
+            self.assertEqual(list((Path(self.tmp.name) / "media").iterdir()), [])
+        finally:
+            server.shutdown()
+            server.server_close()
+            db.conn.close()
+
+
 class WritersTest(unittest.TestCase):
     def test_png_unfilter_matches_source(self):
         png, pixels = make_png(23, 17, 4)
@@ -604,10 +676,17 @@ TABLES = ("settings", "template_tasks", "deliveries", "delivery_tasks", "comment
 FILE_TABLES = ("images", "template_images", "media")  # files may move between them, never vanish
 
 
-def all_files(conn):
-    """Every stored file (sorted bytes), whatever table holds it."""
+def all_files(conn, media_dir=None):
+    """Every stored file (sorted bytes), whatever table holds it, or the media folder (v6 videos)."""
     present = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    return sorted(bytes(r[0]) for t in FILE_TABLES if t in present for r in conn.execute(f"SELECT data FROM {t}"))
+    out = []
+    for t in FILE_TABLES:
+        if t not in present:
+            continue
+        has_file = any(r[1] == "file" for r in conn.execute(f"PRAGMA table_info({t})"))
+        for data, file in conn.execute(f"SELECT data, {'file' if has_file else chr(39) * 2} FROM {t}"):
+            out.append((Path(media_dir) / file).read_bytes() if file else bytes(data))
+    return sorted(out)
 
 
 def load_fixture(version, directory):
@@ -658,7 +737,7 @@ class CompatibilityTest(unittest.TestCase):
                     for table, count in counts.items():
                         self.assertEqual(db.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], count, table)
                     self.assertEqual([tuple(r) for r in db.conn.execute("SELECT body FROM comments ORDER BY id")], comments)
-                    self.assertEqual(all_files(db.conn), files)
+                    self.assertEqual(all_files(db.conn, db.media_dir), files)
                     if version < dbmod.SCHEMA_VERSION:
                         self.assertTrue(db.backup_path and db.backup_path.exists())
 

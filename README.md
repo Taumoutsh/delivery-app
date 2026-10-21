@@ -15,7 +15,8 @@ python checklist-livraison.pyz    # version fichier unique, voir ci-dessous
 ```
 
 Le serveur démarre sur http://localhost:8765 et ouvre le navigateur. La base est stockée dans
-`data/delivery.db` à côté de l'app (c'est le seul fichier à sauvegarder).
+`data/delivery.db` à côté de l'app, les vidéos dans `data/media/` : c'est le dossier `data/` entier
+qu'il faut sauvegarder.
 
 Options : `--port 9000`, `--data /chemin/vers/dossier`, `--no-browser`, `--no-launch` (désactive
 le lancement de programmes) — ou variables `DELIVERY_PORT`, `DELIVERY_DATA`, `DELIVERY_NO_LAUNCH=1`.

@@ -16,7 +16,7 @@ from .templating import build_variables, render_command
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_IMAGE = 15 * 1024 * 1024
-MAX_VIDEO = 200 * 1024 * 1024
+MAX_VIDEO = 2 * 1024 ** 3  # streamed to the media folder, never held in memory
 MAX_JSON = 2 * 1024 * 1024
 IMAGE_TYPES = {"image/png", "image/jpeg"}  # the UI converts GIF/WebP/BMP to PNG before upload
 # Any video/* is accepted and stored as is; the browser plays MP4, WebM, Ogg (and often MOV),
@@ -206,7 +206,8 @@ def delete_comment(h, comment_id):
 
 
 def uploaded_file(h, videos=False):
-    """(filename, mime, data) of a raw file upload: PNG/JPEG images, and any video when videos=True.
+    """(filename, mime, data) of a raw file upload: PNG/JPEG images, and any video when videos=True
+    (for a video, data is None: the caller streams the body, see upload_media).
 
     Browsers send no type (or application/octet-stream) for some files, e.g. .mkv on Windows:
     the type is then deduced from the file name.
@@ -221,7 +222,10 @@ def uploaded_file(h, videos=False):
         accepted = "images PNG ou JPEG" + (" et vidéos (MP4, WebM, MOV, AVI, MKV…)" if videos else "")
         raise HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
                         f"Format non pris en charge pour « {filename} » ({mime or 'type inconnu'}) : {accepted}.")
-    return filename, mime, h.body(MAX_VIDEO if is_video else MAX_IMAGE)
+    if is_video:
+        h.check_length(MAX_VIDEO)
+        return filename, mime, None
+    return filename, mime, h.body(MAX_IMAGE)
 
 
 @route("POST", r"/api/delivery-tasks/(\d+)/images")
@@ -237,13 +241,21 @@ def image_to_template(h, image_id):
 @route("POST", r"/api/media")
 def upload_media(h):
     """File of a media block (image or video), attached when the task is saved."""
-    return h.db.add_media(*uploaded_file(h, videos=True))
+    filename, mime, data = uploaded_file(h, videos=True)
+    if data is None:  # video: written to the media folder as it arrives
+        return h.db.store_video(filename, mime, h.rfile, h.check_length(MAX_VIDEO))
+    return h.db.add_media(filename, mime, data)
 
 
 @route("GET", r"/api/media/(\d+)")
 def get_media(h, media_id):
     item = found(h.db.get_media(int(media_id)))
-    h.send_bytes(item["data"], item["mime"], item["filename"], ranges=True)
+    if item["path"]:
+        if not item["path"].is_file():
+            raise HttpError(HTTPStatus.NOT_FOUND, f"Fichier introuvable dans le dossier media : {item['file']}")
+        h.send_file(item["path"], item["mime"], item["filename"])
+    else:
+        h.send_bytes(item["data"], item["mime"], item["filename"], ranges=True)
 
 
 @route("GET", r"/api/images/(\d+)")
@@ -269,11 +281,15 @@ class Handler(BaseHTTPRequestHandler):
         if "/api/" in (args[0] if args else ""):
             sys.stderr.write("%s %s\n" % (self.log_date_time_string(), fmt % args))
 
-    def body(self, limit=MAX_JSON):
+    def check_length(self, limit):
         length = int(self.headers.get("Content-Length") or 0)
         if length > limit:
-            raise HttpError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                            f"Fichier trop volumineux ({limit // (1024 * 1024)} Mo maximum).")
+            size = f"{limit // 1024 ** 3} Go" if limit >= 1024 ** 3 else f"{limit // 1024 ** 2} Mo"
+            raise HttpError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, f"Fichier trop volumineux ({size} maximum).")
+        return length
+
+    def body(self, limit=MAX_JSON):
+        length = self.check_length(limit)
         return self.rfile.read(length) if length else b""
 
     def json(self):
@@ -283,26 +299,29 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             raise HttpError(HTTPStatus.BAD_REQUEST, "JSON invalide.")
 
-    def send_bytes(self, data, mime, filename=None, attachment=False, ranges=False):
-        """Send a file; with ranges=True a single "Range: bytes=a-b" is honoured (video seeking)."""
-        status, total = HTTPStatus.OK, len(data)
-        match = ranges and re.match(r"bytes=(\d*)-(\d*)$", self.headers.get("Range") or "")
-        if match and (match.group(1) or match.group(2)):
-            if match.group(1):
-                start = int(match.group(1))
-                end = min(int(match.group(2)), total - 1) if match.group(2) else total - 1
-            else:
-                start, end = max(0, total - int(match.group(2))), total - 1
-            if start > end or start >= total:
-                self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
-                self.send_header("Content-Range", f"bytes */{total}")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            status, data = HTTPStatus.PARTIAL_CONTENT, data[start:end + 1]
+    def _range(self, total):
+        """(status, start, end) for the request's "Range: bytes=a-b" header (a single range), or
+        None after answering 416 when it cannot be satisfied."""
+        match = re.match(r"bytes=(\d*)-(\d*)$", self.headers.get("Range") or "")
+        if not (match and (match.group(1) or match.group(2))):
+            return HTTPStatus.OK, 0, total - 1
+        if match.group(1):
+            start = int(match.group(1))
+            end = min(int(match.group(2)), total - 1) if match.group(2) else total - 1
+        else:
+            start, end = max(0, total - int(match.group(2))), total - 1
+        if start > end or start >= total:
+            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            self.send_header("Content-Range", f"bytes */{total}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
+        return HTTPStatus.PARTIAL_CONTENT, start, end
+
+    def _file_headers(self, status, mime, length, total, start, end, filename, attachment, ranges):
         self.send_response(status)
         self.send_header("Content-Type", mime)
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Length", str(length))
         if ranges:
             self.send_header("Accept-Ranges", "bytes")
         if status == HTTPStatus.PARTIAL_CONTENT:
@@ -311,7 +330,38 @@ class Handler(BaseHTTPRequestHandler):
             kind = "attachment" if attachment else "inline"
             self.send_header("Content-Disposition", f"{kind}; filename*=UTF-8''{quote(filename)}")
         self.end_headers()
+
+    def send_bytes(self, data, mime, filename=None, attachment=False, ranges=False):
+        """Send a file; with ranges=True a single "Range: bytes=a-b" is honoured (video seeking)."""
+        total = len(data)
+        status, start, end = HTTPStatus.OK, 0, total - 1
+        if ranges:
+            answer = self._range(total)
+            if answer is None:
+                return
+            status, start, end = answer
+        if status == HTTPStatus.PARTIAL_CONTENT:
+            data = data[start:end + 1]
+        self._file_headers(status, mime, len(data), total, start, end, filename, attachment, ranges)
         self.wfile.write(data)
+
+    def send_file(self, path, mime, filename=None):
+        """Stream a file from disk by chunks, honouring a Range header (video seeking)."""
+        total = path.stat().st_size
+        answer = self._range(total)
+        if answer is None:
+            return
+        status, start, end = answer
+        length = max(0, end - start + 1)
+        self._file_headers(status, mime, length, total, start, end, filename, False, True)
+        with open(path, "rb") as f:
+            f.seek(start)
+            while length > 0:
+                chunk = f.read(min(1024 * 1024, length))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                length -= len(chunk)
 
     def check_request(self, method):
         """Refuse API calls from other sites: unknown Host (DNS rebinding) or, for any state change,

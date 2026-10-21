@@ -23,10 +23,12 @@
   let storageCleaned = false;
   let storageBackups = [{ name: 'delivery.db.v4-20261020-101500.bak', bytes: 41_200_000, modified: '2026-10-20T10:15:00Z' }];
   const demoStorage = () => ({
-    file_bytes: storageCleaned ? 96_400_000 : 187_300_000,
+    file_bytes: storageCleaned ? 8_300_000 : 55_400_000,
     journal_bytes: storageCleaned ? 0 : 23_100_000,
+    media_folder_bytes: storageCleaned ? 88_100_000 : 131_900_000,
     content: [
-      { label: 'Images et vidéos des tâches', count: storageCleaned ? 9 : 12, bytes: storageCleaned ? 88_100_000 : 131_900_000 },
+      { label: 'Images des tâches', count: 6, bytes: 640_000 },
+      { label: 'Vidéos (dossier media)', count: storageCleaned ? 3 : 6, bytes: storageCleaned ? 88_100_000 : 131_900_000 },
       { label: 'Captures des livraisons', count: 14, bytes: 7_600_000 },
       { label: 'Livraisons (3) : tâches et commentaires', count: 31, bytes: 182_000 },
       { label: 'Modèle de tâches', count: 7, bytes: 9_400 },

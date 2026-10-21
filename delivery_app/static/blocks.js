@@ -134,7 +134,7 @@
       blank: () => ({ title: '', files: [] }),
       editor: (b, h) => field('Titre', `<input type="text" data-f="title" value="${h.esc(b.title)}" placeholder="Écran attendu après déploiement">`, '', false)
         + `<div class="bf wide"><span class="bf-label">Fichiers</span>${h.mediaStrip(b.files, { editable: true })}
-            <span class="hint">Images ou vidéos (MP4, WebM, MOV, AVI, MKV… 200 Mo max) : bouton, glisser-déposer, ou Ctrl+V dans cet élément.</span></div>`,
+            <span class="hint">Images ou vidéos (MP4, WebM, MOV, AVI, MKV… 2 Go max) : bouton, glisser-déposer, ou Ctrl+V dans cet élément.</span></div>`,
       read: (card, b) => ({ title: val(card, 'title').trim(), files: b.files || [] }),
       isEmpty: (b) => !b.files.length,
       summary: (b) => `${b.title ? `${b.title} · ` : ''}${b.files.length} fichier${b.files.length > 1 ? 's' : ''}`,
