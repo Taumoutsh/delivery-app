@@ -3,6 +3,11 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.9.5 — 2026-10-21
+
+- Valider une tâche (bouton « Valider » ou coche) ou la marquer non applicable publie d'abord le
+  commentaire en cours de saisie : il n'est plus laissé de côté quand la tâche se replie.
+
 ## 1.9.4 — 2026-10-21
 
 - Élément « Programme » : le chemin et les arguments ne sont plus affichés à côté du bouton
