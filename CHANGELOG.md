@@ -3,6 +3,12 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.9.4 — 2026-10-21
+
+- Élément « Programme » : le chemin et les arguments ne sont plus affichés à côté du bouton
+  « Lancer » ; la ligne de lancement complète apparaît au survol du bouton. Les rapports PDF/Word
+  la citent toujours.
+
 ## 1.9.3 — 2026-10-21
 
 - « Copier pour Word » : la copie passe désormais par l'événement de copie natif du navigateur, avec
