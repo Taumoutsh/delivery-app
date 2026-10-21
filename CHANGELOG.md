@@ -3,6 +3,15 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.11.0 — 2026-10-21
+
+- **Listes à plusieurs niveaux** dans les notes : Tab sur une ligne de liste la passe au niveau
+  suivant, Maj+Tab la remonte (aussi sur plusieurs lignes sélectionnées). Puces et numéros se
+  mélangent librement ; la numérotation repart à 1 dans chaque sous-liste.
+- Rendu imbriqué dans la livraison, et en retrait par niveau dans les rapports PDF et Word.
+- En dehors d'une liste, Tab passe toujours au champ suivant.
+- Aucun changement de format de base.
+
 ## 1.10.0 — 2026-10-21
 
 - **Mise en forme des notes** : gras, italique, souligné, barré, listes à puces et listes

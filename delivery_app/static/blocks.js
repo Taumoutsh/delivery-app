@@ -154,7 +154,8 @@
           </div>
           <textarea data-f="text" data-rich rows="4" placeholder="Prévenir l'équipe support avant de déployer {{version}}.">${h.esc(b.text)}</textarea>
           <span class="hint"><code>**gras**</code> <code>*italique*</code> <code>__souligné__</code> <code>~~barré~~</code>,
-            lignes <code>- </code> pour une liste à puces, <code>1. </code> pour une liste numérotée.</span></div>`,
+            lignes <code>- </code> pour une liste à puces, <code>1. </code> pour une liste numérotée ;
+            Tab / Maj+Tab sur une ligne de liste pour changer de niveau.</span></div>`,
       read: (card) => ({ text: val(card, 'text') }),
       isEmpty: (b) => !b.text.trim(),
       summary: (b) => oneLine(b.text).replace(/^\s*([-*•]|\d+[.)])\s+/, '').replace(/\*\*|__|~~|(?<!\\)\*/g, ''),

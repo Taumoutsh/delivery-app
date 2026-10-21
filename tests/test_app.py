@@ -126,10 +126,11 @@ class ApiTest(unittest.TestCase):
     def test_formatted_note_in_reports(self):
         _, d = self.call("POST", "/api/deliveries", {"version": "6.2.0"})
         _, d = self.call("POST", f"/api/deliveries/{d['id']}/tasks", {"title": "Notes", "blocks": [{"type": "note", "text":
-            "Avant **{{version}}** : *prévenir* __le support__ ~~hier~~\n\n- Point un\n- Point **deux**\n\n1. Étape\n2. Suite"}]})
+            "Avant **{{version}}** : *prévenir* __le support__ ~~hier~~\n\n- Point un\n\t- Sous-point\n- Point **deux**\n\n1. Étape\n2. Suite"}]})
         _, docx = self.call("GET", f"/api/deliveries/{d['id']}/report.docx")
         document = zipfile.ZipFile(io.BytesIO(docx)).read("word/document.xml").decode()
-        for expected in ("<w:b/>", "<w:i/>", '<w:u w:val="single"/>', "<w:strike/>", ">6.2.0<", ">•<", ">2.<", "<w:tab/>"):
+        for expected in ("<w:b/>", "<w:i/>", '<w:u w:val="single"/>', "<w:strike/>", ">6.2.0<", ">•<", ">2.<", "<w:tab/>",
+                         ">◦<", 'w:left="1134"'):
             self.assertIn(expected, document)
         self.assertNotIn("**", document)
         _, report = self.call("GET", f"/api/deliveries/{d['id']}/report.pdf")
@@ -456,10 +457,19 @@ class RenderTest(unittest.TestCase):
             self.assertEqual([t for t, st in parse_inline(text) if st], [], text)
         self.assertEqual(parse_inline("\\*pas\\*"), [("*pas*", plain)])
         blocks = parse_rich("Intro\nsuite\n\n- un\n* deux\n3. trois\n4) quatre\nfin **a\nb**")
-        self.assertEqual([(b["kind"], b["start"], len(b["items"])) for b in blocks],
-                         [("p", 1, 1), ("ul", 1, 2), ("ol", 3, 2), ("p", 1, 1)])
+        self.assertEqual([(b["kind"], len(b["items"])) for b in blocks], [("p", 1), ("list", 4), ("p", 1)])
+        self.assertEqual([(i["kind"], i["number"]) for i in blocks[1]["items"]], [("ul", 1), ("ul", 2), ("ol", 3), ("ol", 4)])
         self.assertEqual(blocks[0]["items"][0], [("Intro", plain), ("\n", plain), ("suite", plain)])
         self.assertEqual(blocks[-1]["items"][0], [("fin **a", plain), ("\n", plain), ("b**", plain)])  # not across lines
+
+    def test_nested_lists(self):
+        (block,) = parse_rich("- a\n\t- a1\n\t\t1. x\n\t\t2. y\n    7. z\n- b\n\t\t\t- trop profond\n\t1. c")
+        self.assertEqual([(i["level"], i["kind"], i["number"], i["segments"][0][0]) for i in block["items"]], [
+            (0, "ul", 1, "a"), (1, "ul", 1, "a1"), (2, "ol", 1, "x"), (2, "ol", 2, "y"),
+            (2, "ol", 3, "z"),           # two spaces per level, numbering continues in the same list
+            (0, "ul", 2, "b"), (1, "ul", 1, "trop profond"),  # at most one level deeper than the line above
+            (1, "ol", 1, "c")])          # new kind at that level: a new list starting at its typed number
+        self.assertEqual(parse_rich("\t\t- seul")[0]["items"][0]["level"], 0)
 
     def test_variables_can_use_other_variables(self):
         variables = build_variables({"version": "2.4.1", "variables": {

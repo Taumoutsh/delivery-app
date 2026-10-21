@@ -154,20 +154,28 @@ def _docx_media(doc, b, variables, db):
             doc.paragraph(doc.run(f"[{kind} : {f['filename']} — à consulter dans l'application]", italic=True))
 
 
-def _rich_items(b, variables):
-    """(kind, marker, [(text, styles)]) for each paragraph or list item of a note."""
+DOCX_BULLETS = ("•", "◦", "▪")
+PDF_BULLETS = ("•", "–", "·")  # WinAnsi has no hollow bullet
+
+
+def _rich_items(b, variables, bullets):
+    """(level, marker, [(text, styles)]) for each paragraph (marker None) or list item of a note."""
     for block in parse_rich(b["text"]):
-        for n, item in enumerate(block["items"]):
-            marker = {"p": None, "ul": "•", "ol": f"{block['start'] + n}."}[block["kind"]]
-            yield block["kind"], marker, [(render_command(t, variables), st) for t, st in item]
+        if block["kind"] == "p":
+            yield 0, None, [(render_command(t, variables), st) for t, st in block["items"][0]]
+            continue
+        for it in block["items"]:
+            marker = bullets[it["level"] % len(bullets)] if it["kind"] == "ul" else f"{it['number']}."
+            yield it["level"], marker, [(render_command(t, variables), st) for t, st in it["segments"]]
 
 
 def _docx_note(doc, b, variables, db):
-    for kind, marker, item in _rich_items(b, variables):
+    for level, marker, item in _rich_items(b, variables, DOCX_BULLETS):
         runs = "".join(doc.run(t, bold="b" in st, italic="i" in st, underline="u" in st, strike="s" in st)
                        for t, st in item)
         if marker:
-            doc.paragraph(doc.run(marker).replace("</w:r>", "<w:tab/></w:r>") + runs, indent=567, hanging=283, after=40)
+            doc.paragraph(doc.run(marker).replace("</w:r>", "<w:tab/></w:r>") + runs,
+                          indent=567 * (level + 1), hanging=340, after=40)
         else:
             doc.paragraph(runs, after=80)
 
@@ -269,10 +277,10 @@ _PDF_FONT = {"": pdf.REGULAR, "b": pdf.BOLD, "i": pdf.ITALIC, "bi": pdf.BOLD_ITA
 
 
 def _pdf_note(doc, b, variables, db):
-    for kind, marker, item in _rich_items(b, variables):
+    for level, marker, item in _rich_items(b, variables, PDF_BULLETS):
         segments = [(t, _PDF_FONT["".join(sorted(st & {"b", "i"}))], pdf.INK, None, "".join(sorted(st & {"u", "s"})))
                     for t, st in item]
-        doc.rich(segments, size=9.5, indent=10 if marker else 0, after=2 if marker else 4, marker=marker)
+        doc.rich(segments, size=9.5, indent=10 + 16 * level if marker else 0, after=2 if marker else 4, marker=marker)
 
 
 PDF_RENDERERS = {
