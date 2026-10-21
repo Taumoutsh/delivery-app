@@ -64,8 +64,7 @@
       view: (b, { vars, h }) => {
         const url = h.renderText(b.url, vars);
         return `<div class="link-row">
-          <a class="link-chip" href="${h.esc(url)}" target="_blank" rel="noopener">${ICON.external}<span>${h.esc(h.renderText(b.label, vars) || url)}</span></a>
-          ${b.label ? `<span class="link-url mono">${h.renderHtml(b.url, vars)}</span>` : ''}
+          <a class="link-chip" href="${h.esc(url)}" title="${h.esc(url)}" target="_blank" rel="noopener">${ICON.external}<span>${h.esc(h.renderText(b.label, vars) || url)}</span></a>
           <button class="btn ghost sm" data-act="blk-copy">Copier le lien</button>
         </div>`;
       },
