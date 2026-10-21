@@ -203,6 +203,23 @@ class ApiTest(unittest.TestCase):
                       .read("word/document.xml").decode())
         self.assertEqual(self.upload("/api/media", b"x", "application/zip", "a.zip")[0], 415)
 
+    def test_any_video_format_is_accepted(self):
+        for mime, name in (("video/x-msvideo", "demo.avi"), ("video/x-matroska", "demo.mkv"),
+                           ("video/x-ms-wmv", "demo.wmv")):
+            status, clip = self.upload("/api/media", b"video", mime, name)
+            self.assertEqual(status, 200, name)
+            self.assertEqual(clip["mime"], mime)
+        # Browsers send no type (or a generic one) for some files: deduce it from the extension.
+        status, clip = self.upload("/api/media", b"video", "application/octet-stream", "demo.mkv")
+        self.assertEqual((status, clip["mime"]), (200, "video/x-matroska"))
+        status, body = self.upload("/api/media", b"x", "application/octet-stream", "notes.bin")
+        self.assertEqual(status, 415)
+        self.assertIn("notes.bin", body["error"])
+        # Delivery captures stay images only.
+        _, d = self.call("POST", "/api/deliveries", {"version": "4.1.0"})
+        status, _ = self.upload(f"/api/delivery-tasks/{d['tasks'][0]['id']}/images", b"v", "video/mp4", "a.mp4")
+        self.assertEqual(status, 415)
+
     def test_launch_program_block(self):
         marker = Path(self.tmp.name) / "lance.txt"
         script = Path(self.tmp.name) / "outil.sh"

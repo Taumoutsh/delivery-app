@@ -125,8 +125,12 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
 ### 2.5 Médias (images, vidéos)
 
 - Images : PNG/JPEG (le navigateur convertit GIF, WebP, BMP… en PNG), 15 Mo maximum.
-- Vidéos : MP4, WebM, Ogg, MOV, 200 Mo maximum ; lecture dans la visionneuse avec avance/recul
-  (le serveur gère les requêtes `Range`).
+- Vidéos : tout type `video/*` (MP4, WebM, Ogg, MOV, AVI, MKV, WMV…), 200 Mo maximum ; si le
+  navigateur n'envoie pas de type (ou `application/octet-stream`), il est déduit de l'extension.
+  Lecture dans la visionneuse avec avance/recul (le serveur gère les requêtes `Range`) ; un format
+  que le navigateur ne sait pas lire (AVI, WMV…) est proposé en téléchargement.
+- Les captures d'une livraison restent des images ; un refus (415) nomme le fichier et les formats
+  acceptés.
 - Ajout dans l'éditeur : bouton, glisser-déposer sur l'élément, Ctrl+V dans l'élément. Le fichier
   est envoyé tout de suite (`POST /api/media`) et rattaché à l'enregistrement de la tâche.
 - Fichiers **immuables et partagés** : une livraison créée depuis le modèle référence les mêmes
@@ -368,3 +372,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.7** — Livraison clôturée en lecture seule jusqu'à sa réouverture (E26), clôture qui met les
   chronos en pause. Pas de changement de schéma.
 - **v1.8** — Variables dans le titre des tâches (livraison, rapports, noms des .docx).
+- **v1.8.1** — Correctif : toutes les vidéos acceptées (AVI, MKV, WMV…), type déduit de l'extension.

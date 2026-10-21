@@ -706,8 +706,12 @@
       sync();
       const b = ed.blocks.find((x) => x.id === card.dataset.card);
       for (const file of files) {
-        if (!/^(image|video)\//.test(file.type)) continue;
-        const prepared = file.type.startsWith('image/') ? await toPngOrJpeg(file) : file;
+        const kind = fileKind(file);
+        if (!kind) {
+          toast(`Format non pris en charge : ${file.name} (images ou vidéos uniquement)`, true);
+          continue;
+        }
+        const prepared = kind === 'image' ? await toPngOrJpeg(file) : withVideoType(file);
         b.files.push(await run(API.uploadMedia(prepared)));
       }
       refresh();
@@ -858,8 +862,19 @@
       el.innerHTML = `
         <button class="close" aria-label="Fermer">✕</button>
         ${task.images.length > 1 ? '<button class="nav prev" aria-label="Précédente">‹</button><button class="nav next" aria-label="Suivante">›</button>' : ''}
-        ${isVideo(img) ? `<video src="${esc(img.url)}" controls autoplay></video>` : `<img src="${esc(img.url)}" alt="${esc(img.filename)}">`}
-        <div class="cap">${esc(img.filename)} · ${idx + 1} / ${task.images.length}</div>`;
+        ${isVideo(img) ? `<video src="${esc(img.url)}" controls autoplay></video>
+          <div class="video-unsupported" hidden>Ce navigateur ne sait pas lire ce format vidéo.
+            <a href="${esc(img.url)}" download="${esc(img.filename)}">Télécharger la vidéo</a> pour l'ouvrir avec le lecteur du poste.</div>`
+          : `<img src="${esc(img.url)}" alt="${esc(img.filename)}">`}
+        <div class="cap">${esc(img.filename)} · ${idx + 1} / ${task.images.length}${isVideo(img)
+          ? ` · <a href="${esc(img.url)}" download="${esc(img.filename)}">Télécharger</a>` : ''}</div>`;
+      const video = el.querySelector('video');
+      if (video) {
+        video.addEventListener('error', () => {
+          video.hidden = true;
+          el.querySelector('.video-unsupported').hidden = false;
+        });
+      }
     };
     const step = (n) => { idx = (idx + n + task.images.length) % task.images.length; show(); };
     const close = () => { el.remove(); document.removeEventListener('keydown', onKey); };
@@ -871,7 +886,7 @@
     el.addEventListener('click', (e) => {
       if (e.target.closest('.prev')) step(-1);
       else if (e.target.closest('.next')) step(1);
-      else if (!['IMG', 'VIDEO'].includes(e.target.tagName)) close();
+      else if (!['IMG', 'VIDEO', 'A'].includes(e.target.tagName) && !e.target.closest('.video-unsupported')) close();
     });
     document.addEventListener('keydown', onKey);
     show();
@@ -879,6 +894,18 @@
   }
 
   // ---------------------------------------------------------------- actions
+
+  // Some browsers give no type for a file (e.g. .mkv on Windows): fall back on its extension.
+  const VIDEO_EXT = { mp4: 'video/mp4', m4v: 'video/x-m4v', webm: 'video/webm', ogv: 'video/ogg', mov: 'video/quicktime',
+    avi: 'video/x-msvideo', wmv: 'video/x-ms-wmv', mkv: 'video/x-matroska', mpg: 'video/mpeg', mpeg: 'video/mpeg', '3gp': 'video/3gpp' };
+  const extOf = (file) => (file.name || '').split('.').pop().toLowerCase();
+  function fileKind(file) {
+    if (file.type.startsWith('image/')) return 'image';
+    if (file.type.startsWith('video/') || (!file.type || file.type === 'application/octet-stream') && VIDEO_EXT[extOf(file)]) return 'video';
+    return null;
+  }
+  const withVideoType = (file) => (file.type.startsWith('video/') ? file
+    : new File([file], file.name, { type: VIDEO_EXT[extOf(file)] }));
 
   // Reports embed PNG/JPEG only: other formats (GIF, WebP, BMP…) are converted to PNG in the browser.
   async function toPngOrJpeg(file) {
@@ -904,7 +931,10 @@
   }
 
   async function uploadFiles(scope, ownerId, files) {
-    const images = [...files].filter((f) => f.type.startsWith('image/'));
+    const images = [...files].filter((f) => fileKind(f) === 'image');
+    if ([...files].some((f) => fileKind(f) === 'video')) {
+      toast('Les captures de la livraison sont des images. Pour une vidéo, ajoutez un élément « Images et vidéos » (Modifier la tâche).', true);
+    }
     if (!images.length) return;
     let res;
     for (const f of images) res = await run(toPngOrJpeg(f).then((png) => API.uploadImage(ownerId, png)));
