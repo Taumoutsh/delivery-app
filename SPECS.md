@@ -509,3 +509,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.14** — Vidéos dans `data/media/` (E32), envoi en flux jusqu'à 2 Go, schéma v6.
 - **v1.15** — Tâches du modèle activables / désactivables (E33), schéma v7.
 - **v1.16** — Tâches d'attente avec alerte visuelle (E34), logo de l'application (E35), schéma v8.
+- **v1.16.1** — Correctif : case « Tâche d'attente » alignée avec son libellé dans l'éditeur.
