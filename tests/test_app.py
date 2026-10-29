@@ -185,6 +185,34 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(report["reclaimable"]["free_bytes"], 0)
 
+    def test_disabled_template_tasks_are_not_copied(self):
+        _, tasks = self.call("GET", "/api/tasks")
+        self.assertTrue(all(t["enabled"] for t in tasks))  # enabled by default
+        target = tasks[1]
+        _, before = self.call("POST", "/api/deliveries", {"version": "10.0.0"})
+        status, updated = self.call("PUT", f"/api/tasks/{target['id']}", {"enabled": False})
+        self.assertEqual(status, 200)
+        self.assertFalse(updated["enabled"])
+        self.assertEqual((updated["title"], updated["blocks"]), (target["title"], target["blocks"]))  # nothing else changes
+        try:
+            _, d = self.call("POST", "/api/deliveries", {"version": "10.0.1"})
+            copied = [t["template_task_id"] for t in d["tasks"]]
+            self.assertNotIn(target["id"], copied)
+            self.assertEqual(len(copied), len(tasks) - 1)
+            self.assertEqual(d["tasks"][0]["status"], "running")  # chained timers skip nothing they should not
+            # The task stays in the template, and existing deliveries keep it.
+            _, again = self.call("GET", "/api/tasks")
+            self.assertIn(target["id"], [t["id"] for t in again])
+            _, old = self.call("GET", f"/api/deliveries/{before['id']}")
+            self.assertIn(target["id"], [t["template_task_id"] for t in old["tasks"]])
+            # Editing a disabled task keeps it disabled.
+            _, edited = self.call("PUT", f"/api/tasks/{target['id']}", {"title": target["title"] + " (bis)"})
+            self.assertFalse(edited["enabled"])
+        finally:
+            self.call("PUT", f"/api/tasks/{target['id']}", {"enabled": True, "title": target["title"]})
+        _, d = self.call("POST", "/api/deliveries", {"version": "10.0.2"})
+        self.assertIn(target["id"], [t["template_task_id"] for t in d["tasks"]])
+
     def test_template_changes_do_not_rewrite_history(self):
         _, d = self.call("POST", "/api/deliveries", {"version": "1.0.0"})
         tpl_id = d["tasks"][0]["template_task_id"]

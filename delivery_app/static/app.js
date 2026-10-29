@@ -735,12 +735,16 @@
 
   function renderTemplate() {
     const tasks = state.templateTasks;
-    const totalE = tasks.reduce((a, t) => a + t.estimated_minutes, 0);
+    const active = tasks.filter((t) => t.enabled !== false);
+    const totalE = active.reduce((a, t) => a + t.estimated_minutes, 0);
     const rows = tasks.map((t, i) => `
-      <div class="tpl-row" data-tpl-id="${t.id}">
-        <span class="tpl-idx">${i + 1}</span>
+      <div class="tpl-row${t.enabled === false ? ' off' : ''}" data-tpl-id="${t.id}">
+        <button type="button" class="switch" role="switch" aria-checked="${t.enabled !== false}" data-act="tpl-toggle" data-id="${t.id}"
+          title="${t.enabled !== false ? 'Activée : copiée dans les nouvelles livraisons. Cliquer pour la désactiver.'
+            : 'Désactivée : pas copiée dans les nouvelles livraisons. Cliquer pour l\'activer.'}"
+          aria-label="Tâche « ${esc(t.title)} » ${t.enabled !== false ? 'activée' : 'désactivée'}"><span></span></button>
         <div class="tpl-main">
-          <strong>${esc(t.title)}</strong>
+          <strong><span class="tpl-idx">${i + 1}.</span> ${esc(t.title)}${t.enabled === false ? ' <span class="badge off-badge">Désactivée</span>' : ''}</strong>
           <div class="tpl-blocks">${t.blocks.length ? t.blocks.map((b) => `<span class="tpl-blk" title="${esc(Blocks.get(b.type).label)}">${Blocks.get(b.type).icon}<span>${esc(Blocks.get(b.type).summary(b))}</span></span>`).join('')
             : '<i class="muted">Aucun élément</i>'}</div>
         </div>
@@ -756,9 +760,10 @@
     return `
       <div class="head">
         <div>
-          <div class="eyebrow">${tasks.length} tâches · ${fmtDur(totalE * 60)} estimées</div>
+          <div class="eyebrow">${active.length === tasks.length ? `${tasks.length} tâches` : `${active.length} tâches actives sur ${tasks.length}`} · ${fmtDur(totalE * 60)} estimées</div>
           <h1>Modèle de tâches</h1>
-          <div class="sub">Copié dans chaque nouvelle livraison. Les livraisons existantes ne sont pas modifiées.</div>
+          <div class="sub">Les tâches activées sont copiées dans chaque nouvelle livraison ; l'interrupteur à gauche
+            de chaque tâche la retire des prochaines livraisons sans la supprimer. Les livraisons existantes ne sont pas modifiées.</div>
         </div>
         <div class="head-actions"><button class="btn primary" data-act="tpl-add">${ICONS.plus}Ajouter une tâche</button></div>
       </div>
@@ -1072,7 +1077,9 @@
   }
 
   async function deliveryModal(existing) {
-    const tasks = existing ? existing.tasks : await API.listTasks();
+    const template = existing ? [] : await API.listTasks();
+    const tasks = existing ? existing.tasks : template.filter((t) => t.enabled !== false); // the ones copied
+    const off = template.length - (existing ? 0 : tasks.length);
     const settings = await API.getSettings();
     let vars = existing ? { ...existing.variables } : { ...settings.default_variables };
     if (!existing) {
@@ -1082,6 +1089,8 @@
     const used = placeholdersIn(tasks);
     modal({
       title: existing ? 'Modifier la livraison' : 'Nouvelle livraison',
+      subtitle: existing ? '' : `${tasks.length} tâche${tasks.length > 1 ? 's' : ''} du modèle${off
+        ? ` (${off} désactivée${off > 1 ? 's' : ''}, non copiée${off > 1 ? 's' : ''})` : ''}`,
       submit: existing ? 'Enregistrer' : 'Créer la livraison',
       body: `
         <div class="row2">
@@ -1530,6 +1539,14 @@
           toast('Modèle mis à jour');
         },
       });
+    },
+    async 'tpl-toggle'(el) {
+      const t = state.templateTasks.find((x) => x.id === Number(el.dataset.id));
+      const updated = await run(API.updateTask(t.id, { enabled: t.enabled === false }));
+      Object.assign(t, updated);
+      render();
+      toast(updated.enabled ? `« ${t.title} » activée : elle sera dans les prochaines livraisons`
+        : `« ${t.title} » désactivée : elle ne sera pas dans les prochaines livraisons`);
     },
     async 'tpl-delete'(el) {
       if (!(await confirmBox('Supprimer cette tâche du modèle ? Les livraisons existantes la conservent.'))) return;

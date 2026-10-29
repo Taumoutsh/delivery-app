@@ -3,6 +3,16 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.15.0 — 2026-10-29
+
+- **Activer / désactiver des tâches du modèle** : un interrupteur à gauche de chaque tâche du
+  modèle. Une tâche désactivée reste dans le modèle (grisée, avec tout son contenu) mais n'est plus
+  copiée dans les nouvelles livraisons. Toutes les tâches sont activées par défaut.
+- Le nombre de tâches et le temps estimé du modèle ne comptent que les tâches activées ; la
+  fenêtre « Nouvelle livraison » indique combien de tâches seront copiées.
+- Les livraisons existantes ne changent pas.
+- Format de base v7 (mise à jour automatique avec sauvegarde `.bak`).
+
 ## 1.14.0 — 2026-10-21
 
 - **Vidéos hors de la base** : elles sont rangées dans le dossier `data/media/`, à côté de la base.

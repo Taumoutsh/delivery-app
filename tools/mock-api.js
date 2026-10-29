@@ -103,6 +103,7 @@
   ].map(([title, description, estimated_minutes, blocks], i) => ({
     id: i + 1, position: i, title, description, estimated_minutes,
     blocks: blocks.map((b) => ({ id: `b${nextId()}`, ...b })),
+    enabled: true,
   }));
 
   // Copies, not links: a delivery keeps its own blocks and media.
@@ -184,6 +185,7 @@
       title: data.title.trim(), description: data.description || '',
       estimated_minutes: Math.max(0, Number(data.estimated_minutes) || 0),
       blocks: clone(data.blocks || []),
+      enabled: data.enabled !== false,
     };
   };
   const ok = (v) => new Promise((r) => setTimeout(() => r(v), 60));
@@ -225,7 +227,7 @@
         id: nextId(), version: data.version.trim(), name: data.name || '', status: 'in_progress',
         variables: { ...data.variables }, created_at: iso(new Date()), completed_at: null,
       };
-      d.tasks = template.map((t) => fromTemplate(t));
+      d.tasks = template.filter((t) => t.enabled !== false).map((t) => fromTemplate(t));
       startNext(d, null, d.created_at);
       deliveries.push(d);
       return ok(full(d));

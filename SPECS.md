@@ -41,11 +41,17 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E30 | Faire le ménage dans la base (fichiers et données inutilisés), la garder compacte | ✅ v1.12 (§2.10) |
 | E31 | Chrono lancé automatiquement : première tâche à la création, puis tâche suivante à la fin d'une tâche | ✅ v1.13 (§2.6) |
 | E32 | Vidéos hors de la base, dans un dossier `data/media` géré par l'application | ✅ v1.14 (§2.5, schéma v6) |
+| E33 | Activer / désactiver des tâches du modèle (toutes activées par défaut) | ✅ v1.15 (§2, schéma v7) |
 
 ## 2. Concepts
 
 - **Modèle de tâches** : la liste « maître » des tâches. Chaque nouvelle livraison en fait une
   **copie** (snapshot). Modifier le modèle ne réécrit jamais l'historique.
+  Chaque tâche du modèle peut être **activée ou désactivée** (v1.15, interrupteur à gauche de la
+  tâche, activée par défaut) : une tâche désactivée reste dans le modèle, grisée, avec son contenu,
+  mais n'est pas copiée dans les nouvelles livraisons. Les compteurs du modèle (nombre de tâches,
+  temps estimé) et la fenêtre « Nouvelle livraison » ne comptent que les tâches activées. Modifier
+  une tâche désactivée la laisse désactivée ; les livraisons existantes ne changent pas.
 - **Livraison** : une version (ex. `2.4.0`), un nom optionnel, des variables personnalisées,
   un statut (`in_progress` / `done`), ses tâches.
 - **Tâche** : titre, description, temps estimé, **liste ordonnée d'éléments** (§2.2). Dans une
@@ -307,11 +313,11 @@ Choix :
   cette adresse est ajoutée aux hôtes autorisés.
 - Variables d'environnement : `DELIVERY_PORT`, `DELIVERY_HOST`, `DELIVERY_DATA`, `DELIVERY_NO_LAUNCH`.
 
-### 3.1 Schéma (version 6)
+### 3.1 Schéma (version 7)
 
 - `settings(key, value)` — `schema_version`, `default_variables` (JSON), `app_title`.
 - `template_tasks(id, position, title, description, blocks JSON, estimated_minutes, created_at,
-  updated_at)` + colonnes historiques inutilisées : `command`, `table_spec`, `commands`,
+  updated_at, enabled)` (`enabled` : 1 = copiée dans les nouvelles livraisons, v7) + colonnes historiques inutilisées : `command`, `table_spec`, `commands`,
   `link_tables`, `weight`.
 - `deliveries(id, version, name, variables JSON, status, created_at, completed_at)`
 - `delivery_tasks(id, delivery_id→deliveries, template_task_id→template_tasks, position, title,
@@ -349,6 +355,7 @@ Historique :
   `Database._move_videos_out` écrit chaque vidéo encore dans la base dans `media/` (fichier complet
   écrit puis renommé avant que la ligne pointe dessus), puis vide `data` ; le compactage automatique
   rend ensuite la place. La sauvegarde `.bak` garde l'ancienne base avec ses vidéos.
+- v6 → v7 : colonne `template_tasks.enabled` (1 par défaut : toutes les tâches restent activées).
 
 Pour toute évolution qui touche la base :
 
@@ -475,3 +482,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.12** — Stockage : état de la base, « Faire le ménage », compactage automatique, journal limité (E30).
 - **v1.13** — Chronos enchaînés (E31), désactivables dans « Application ».
 - **v1.14** — Vidéos dans `data/media/` (E32), envoi en flux jusqu'à 2 Go, schéma v6.
+- **v1.15** — Tâches du modèle activables / désactivables (E33), schéma v7.

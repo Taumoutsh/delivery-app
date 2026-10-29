@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS template_tasks (
     link_tables       TEXT    NOT NULL DEFAULT '[]',
     weight            INTEGER NOT NULL DEFAULT 1,
     created_at        TEXT    NOT NULL,
-    updated_at        TEXT    NOT NULL
+    updated_at        TEXT    NOT NULL,
+    enabled           INTEGER NOT NULL DEFAULT 1     -- 0 = kept in the template, not copied (v7)
 );
 
 CREATE TABLE IF NOT EXISTS deliveries (
@@ -193,6 +194,11 @@ def _migrate_v6(conn):
     conn.execute("ALTER TABLE media ADD COLUMN file TEXT NOT NULL DEFAULT ''")
 
 
+def _migrate_v7(conn):
+    """v7: template tasks can be disabled (kept in the template, not copied into new deliveries)."""
+    conn.execute("ALTER TABLE template_tasks ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
+
+
 # version -> step upgrading a database from (version - 1). Steps run in order, in one transaction.
 # Never edit a released step: add a new one.
 MIGRATIONS = {
@@ -201,6 +207,7 @@ MIGRATIONS = {
     4: _migrate_v4,
     5: _migrate_v5,
     6: _migrate_v6,
+    7: _migrate_v7,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 
@@ -453,8 +460,8 @@ class Database:
                 return None
             merged = {**_task_out(current), **data}
             self.conn.execute(
-                "UPDATE template_tasks SET title=?, description=?, blocks=?, estimated_minutes=?, updated_at=?"
-                " WHERE id=?", (*_task_fields(merged), now_iso(), task_id))
+                "UPDATE template_tasks SET title=?, description=?, blocks=?, estimated_minutes=?, enabled=?,"
+                " updated_at=? WHERE id=?", (*_task_fields(merged), 1 if merged["enabled"] else 0, now_iso(), task_id))
             return self._tasks_out([self._one("SELECT * FROM template_tasks WHERE id=?", (task_id,))])[0]
 
     def delete_template_task(self, task_id):
@@ -492,7 +499,7 @@ class Database:
                 "INSERT INTO deliveries (version, name, variables, created_at) VALUES (?,?,?,?)",
                 (version, str(data.get("name") or "").strip(), json.dumps(variables), ts))
             delivery_id = cur.lastrowid
-            for t in self._all("SELECT * FROM template_tasks ORDER BY position, id"):
+            for t in self._all("SELECT * FROM template_tasks WHERE enabled = 1 ORDER BY position, id"):
                 # The blocks are copied; their media files are immutable rows shared with the template.
                 self.conn.execute(
                     "INSERT INTO delivery_tasks (delivery_id, template_task_id, position, title, description,"
@@ -1007,6 +1014,8 @@ def _task_out(task):
         task.pop(legacy, None)
     raw = task.get("blocks")
     task["blocks"] = blockreg.normalize(json.loads(raw or "[]") if isinstance(raw, str) else raw)
+    if "enabled" in task:  # template tasks only
+        task["enabled"] = bool(task["enabled"])
     return task
 
 
