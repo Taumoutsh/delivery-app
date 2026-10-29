@@ -29,6 +29,8 @@
     deleteTask: (id) => del(`/api/tasks/${id}`),
     reorderTasks: (ids) => post('/api/tasks/reorder', { ids }),
 
+    setLogo: (file) => upload('/api/logo', file, 'PUT'),
+    deleteLogo: () => del('/api/logo'),
     getStorage: () => get('/api/storage'),
     cleanupStorage: (deleteBackups) => post('/api/storage/cleanup', { delete_backups: deleteBackups }),
 
@@ -58,9 +60,9 @@
       'tableaux.docx'),
   };
 
-  async function upload(url, file) {
+  async function upload(url, file, method = 'POST') {
     const res = await fetch(url, {
-      method: 'POST',
+      method,
       headers: { 'Content-Type': file.type, 'X-Filename': encodeURIComponent(file.name || 'capture.png'), 'X-Checklist': '1' },
       body: file,
     });

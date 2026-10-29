@@ -1,5 +1,6 @@
 """SQLite storage: schema, migrations and data-access helpers."""
 
+import base64
 import hashlib
 import io
 import json
@@ -38,7 +39,8 @@ CREATE TABLE IF NOT EXISTS template_tasks (
     weight            INTEGER NOT NULL DEFAULT 1,
     created_at        TEXT    NOT NULL,
     updated_at        TEXT    NOT NULL,
-    enabled           INTEGER NOT NULL DEFAULT 1     -- 0 = kept in the template, not copied (v7)
+    enabled           INTEGER NOT NULL DEFAULT 1,    -- 0 = kept in the template, not copied (v7)
+    alarm             INTEGER NOT NULL DEFAULT 0     -- 1 = waiting task: alert when the estimate is reached (v8)
 );
 
 CREATE TABLE IF NOT EXISTS deliveries (
@@ -71,7 +73,8 @@ CREATE TABLE IF NOT EXISTS delivery_tasks (
     elapsed_seconds   INTEGER NOT NULL DEFAULT 0,
     running_since     TEXT,
     started_at        TEXT,
-    completed_at      TEXT
+    completed_at      TEXT,
+    alarm             INTEGER NOT NULL DEFAULT 0     -- copied from the template task (v8)
 );
 
 CREATE TABLE IF NOT EXISTS comments (
@@ -199,6 +202,12 @@ def _migrate_v7(conn):
     conn.execute("ALTER TABLE template_tasks ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
 
 
+def _migrate_v8(conn):
+    """v8: waiting tasks ("cloche"): an alert when the timer reaches the estimate."""
+    conn.execute("ALTER TABLE template_tasks ADD COLUMN alarm INTEGER NOT NULL DEFAULT 0")
+    conn.execute("ALTER TABLE delivery_tasks ADD COLUMN alarm INTEGER NOT NULL DEFAULT 0")
+
+
 # version -> step upgrading a database from (version - 1). Steps run in order, in one transaction.
 # Never edit a released step: add a new one.
 MIGRATIONS = {
@@ -208,6 +217,7 @@ MIGRATIONS = {
     5: _migrate_v5,
     6: _migrate_v6,
     7: _migrate_v7,
+    8: _migrate_v8,
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 
@@ -414,6 +424,8 @@ class Database:
                 "auto_timer": rows.get("auto_timer", "1") == "1",
                 "app_version": __version__,
                 "schema_version": int(rows.get("schema_version") or SCHEMA_VERSION),
+                # Logo of the sidebar: URL changing with each new logo (browser cache), or None.
+                "logo": f"/api/logo?v={rows['logo_updated']}" if rows.get("logo") else None,
             }
 
     def save_settings(self, data):
@@ -435,6 +447,26 @@ class Database:
         row = self.conn.execute("SELECT value FROM settings WHERE key='auto_timer'").fetchone()
         return not row or row[0] == "1"
 
+    def get_logo(self):
+        """(mime, bytes) of the application logo, or None."""
+        with self._lock:
+            rows = {r["key"]: r["value"] for r in self._all(
+                "SELECT key, value FROM settings WHERE key IN ('logo', 'logo_mime')")}
+        if not rows.get("logo"):
+            return None
+        return rows.get("logo_mime") or "image/png", base64.b64decode(rows["logo"])
+
+    def set_logo(self, mime, data):
+        """Replace the logo (data=None removes it). Stored in settings: one small image, no schema change."""
+        with self._lock, self.conn:
+            if data is None:
+                self.conn.execute("DELETE FROM settings WHERE key IN ('logo', 'logo_mime', 'logo_updated')")
+            else:
+                for key, value in (("logo", base64.b64encode(data).decode("ascii")), ("logo_mime", mime),
+                                   ("logo_updated", hashlib.sha256(data).hexdigest()[:12])):
+                    self.conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (key, value))
+        return self.get_settings()
+
     def app_title(self):
         return self.get_settings()["app_title"]
 
@@ -450,7 +482,7 @@ class Database:
             pos = self.conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM template_tasks").fetchone()[0]
             cur = self.conn.execute(
                 "INSERT INTO template_tasks (position, title, description, blocks, estimated_minutes,"
-                " created_at, updated_at) VALUES (?,?,?,?,?,?,?)", (pos, *_task_fields(data), ts, ts))
+                " created_at, updated_at, alarm) VALUES (?,?,?,?,?,?,?,?)", (pos, *_task_fields(data), ts, ts, _flag(data, "alarm")))
             return self._tasks_out([self._one("SELECT * FROM template_tasks WHERE id=?", (cur.lastrowid,))])[0]
 
     def update_template_task(self, task_id, data):
@@ -460,8 +492,9 @@ class Database:
                 return None
             merged = {**_task_out(current), **data}
             self.conn.execute(
-                "UPDATE template_tasks SET title=?, description=?, blocks=?, estimated_minutes=?, enabled=?,"
-                " updated_at=? WHERE id=?", (*_task_fields(merged), 1 if merged["enabled"] else 0, now_iso(), task_id))
+                "UPDATE template_tasks SET title=?, description=?, blocks=?, estimated_minutes=?, enabled=?, alarm=?,"
+                " updated_at=? WHERE id=?",
+                (*_task_fields(merged), _flag(merged, "enabled"), _flag(merged, "alarm"), now_iso(), task_id))
             return self._tasks_out([self._one("SELECT * FROM template_tasks WHERE id=?", (task_id,))])[0]
 
     def delete_template_task(self, task_id):
@@ -503,9 +536,9 @@ class Database:
                 # The blocks are copied; their media files are immutable rows shared with the template.
                 self.conn.execute(
                     "INSERT INTO delivery_tasks (delivery_id, template_task_id, position, title, description,"
-                    " blocks, estimated_minutes) VALUES (?,?,?,?,?,?,?)",
+                    " blocks, estimated_minutes, alarm) VALUES (?,?,?,?,?,?,?,?)",
                     (delivery_id, t["id"], t["position"], t["title"], t["description"], t["blocks"],
-                     t["estimated_minutes"]))
+                     t["estimated_minutes"], t["alarm"]))
             if self._auto_timer():  # the first task's timer starts with the delivery
                 self._start_next(delivery_id, None, ts)
         return self.get_delivery(delivery_id)
@@ -591,7 +624,8 @@ class Database:
                                     " WHERE delivery_id=?", (delivery_id,)).fetchone()[0]
             self.conn.execute(
                 "INSERT INTO delivery_tasks (delivery_id, template_task_id, position, title, description,"
-                " blocks, estimated_minutes) VALUES (?,?,?,?,?,?,?)", (delivery_id, template_id, pos, *_task_fields(data)))
+                " blocks, estimated_minutes, alarm) VALUES (?,?,?,?,?,?,?,?)",
+                (delivery_id, template_id, pos, *_task_fields(data), _flag(data, "alarm")))
         return self.get_delivery(delivery_id)
 
     def update_delivery_task(self, task_id, data):
@@ -602,8 +636,8 @@ class Database:
             self._ensure_open(current["delivery_id"])
             merged = {**_task_out(current), **data}
             self.conn.execute(
-                "UPDATE delivery_tasks SET title=?, description=?, blocks=?, estimated_minutes=? WHERE id=?",
-                (*_task_fields(merged), task_id))
+                "UPDATE delivery_tasks SET title=?, description=?, blocks=?, estimated_minutes=?, alarm=? WHERE id=?",
+                (*_task_fields(merged), _flag(merged, "alarm"), task_id))
         return self.get_delivery(current["delivery_id"])
 
     def delete_delivery_task(self, task_id):
@@ -1014,9 +1048,14 @@ def _task_out(task):
         task.pop(legacy, None)
     raw = task.get("blocks")
     task["blocks"] = blockreg.normalize(json.loads(raw or "[]") if isinstance(raw, str) else raw)
-    if "enabled" in task:  # template tasks only
-        task["enabled"] = bool(task["enabled"])
+    for flag in ("enabled", "alarm"):  # enabled: template tasks only
+        if flag in task:
+            task[flag] = bool(task[flag])
     return task
+
+
+def _flag(data, key):
+    return 1 if data.get(key) else 0
 
 
 def _task_fields(data):

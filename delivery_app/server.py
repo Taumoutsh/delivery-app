@@ -12,10 +12,12 @@ from urllib.parse import quote, unquote, urlparse
 
 from . import __version__, launcher, report
 from .db import DeliveryClosed
+from .docx_writer import image_ext
 from .templating import build_variables, render_command
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_IMAGE = 15 * 1024 * 1024
+MAX_LOGO = 2 * 1024 * 1024
 MAX_VIDEO = 2 * 1024 ** 3  # streamed to the media folder, never held in memory
 MAX_JSON = 2 * 1024 * 1024
 IMAGE_TYPES = {"image/png", "image/jpeg"}  # the UI converts GIF/WebP/BMP to PNG before upload
@@ -61,6 +63,28 @@ def get_settings(h):
 @route("PUT", "/api/settings")
 def put_settings(h):
     return h.db.save_settings(h.json())
+
+
+@route("GET", "/api/logo")
+def get_logo(h):
+    mime, data = found(h.db.get_logo())
+    h.send_bytes(data, mime)
+
+
+@route("PUT", "/api/logo")
+def put_logo(h):
+    _, mime, data = uploaded_file(h)
+    if len(data) > MAX_LOGO:
+        raise HttpError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Logo trop volumineux (2 Mo maximum).")
+    kind = image_ext(data)
+    if kind not in ("png", "jpeg"):
+        raise HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Le logo doit être une image PNG (ou JPEG).")
+    return h.db.set_logo(f"image/{kind}", data)
+
+
+@route("DELETE", "/api/logo")
+def delete_logo(h):
+    return h.db.set_logo(None, None)
 
 
 @route("GET", "/api/storage")

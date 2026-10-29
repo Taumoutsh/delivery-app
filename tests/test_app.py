@@ -185,6 +185,42 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(report["reclaimable"]["free_bytes"], 0)
 
+    def test_waiting_task_bell(self):
+        _, tasks = self.call("GET", "/api/tasks")
+        self.assertFalse(any(t["alarm"] for t in tasks))  # off by default
+        target = tasks[0]
+        _, updated = self.call("PUT", f"/api/tasks/{target['id']}", {"alarm": True})
+        self.assertTrue(updated["alarm"])
+        self.assertEqual(updated["title"], target["title"])
+        try:
+            _, d = self.call("POST", "/api/deliveries", {"version": "11.0.0"})
+            task = next(t for t in d["tasks"] if t["template_task_id"] == target["id"])
+            self.assertTrue(task["alarm"])  # copied into the delivery
+            _, d = self.call("PUT", f"/api/delivery-tasks/{task['id']}", {"alarm": False})
+            self.assertFalse(next(t for t in d["tasks"] if t["id"] == task["id"])["alarm"])
+            _, d = self.call("POST", f"/api/deliveries/{d['id']}/tasks", {"title": "Attendre", "alarm": True, "estimated_minutes": 5})
+            self.assertTrue(d["tasks"][-1]["alarm"])
+            # Editing other fields keeps the bell.
+            _, edited = self.call("PUT", f"/api/tasks/{target['id']}", {"estimated_minutes": 12})
+            self.assertTrue(edited["alarm"])
+        finally:
+            self.call("PUT", f"/api/tasks/{target['id']}", {"alarm": False, "estimated_minutes": target["estimated_minutes"]})
+
+    def test_logo(self):
+        _, settings = self.call("GET", "/api/settings")
+        self.assertIsNone(settings["logo"])
+        self.assertEqual(self.call("GET", "/api/logo")[0], 404)
+        self.assertEqual(self.call("PUT", "/api/logo", raw=PNG, headers={"Content-Type": "image/png"}, app=False)[0], 403)
+        status, body = self.call("PUT", "/api/logo", raw=b"not an image", headers={"Content-Type": "image/png"})
+        self.assertEqual(status, 415, body)
+        status, settings = self.call("PUT", "/api/logo", raw=PNG, headers={"Content-Type": "image/png", "X-Filename": "logo.png"})
+        self.assertEqual(status, 200)
+        self.assertTrue(settings["logo"].startswith("/api/logo?v="))
+        self.assertEqual(self.call("GET", settings["logo"])[1], PNG)
+        _, settings = self.call("DELETE", "/api/logo")
+        self.assertIsNone(settings["logo"])
+        self.assertEqual(self.call("GET", "/api/logo")[0], 404)
+
     def test_disabled_template_tasks_are_not_copied(self):
         _, tasks = self.call("GET", "/api/tasks")
         self.assertTrue(all(t["enabled"] for t in tasks))  # enabled by default

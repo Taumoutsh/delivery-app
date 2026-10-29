@@ -3,6 +3,18 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.16.0 — 2026-10-29
+
+- **Tâche d'attente (cloche)** : un bouton cloche sur chaque tâche (dans la livraison, dans le
+  modèle, et une case dans l'éditeur). Quand le chrono d'une tâche d'attente en cours atteint son
+  temps estimé, la tâche clignote en rouge, la cloche s'agite, un bandeau « Attente terminée »
+  s'affiche en haut de l'écran et le titre de l'onglet clignote, jusqu'au clic sur « J'ai vu ».
+  Pratique pour attendre la fin d'un déploiement, d'un build ou d'une validation.
+- **Logo de l'application** : encart en haut à gauche pour charger un PNG (clic ou
+  glisser-déposer). Il s'affiche au-dessus du nom de l'application et dans l'onglet du navigateur ;
+  « × » pour le retirer.
+- Format de base v8 (mise à jour automatique avec sauvegarde `.bak`).
+
 ## 1.15.0 — 2026-10-29
 
 - **Activer / désactiver des tâches du modèle** : un interrupteur à gauche de chaque tâche du

@@ -42,6 +42,8 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E31 | Chrono lancé automatiquement : première tâche à la création, puis tâche suivante à la fin d'une tâche | ✅ v1.13 (§2.6) |
 | E32 | Vidéos hors de la base, dans un dossier `data/media` géré par l'application | ✅ v1.14 (§2.5, schéma v6) |
 | E33 | Activer / désactiver des tâches du modèle (toutes activées par défaut) | ✅ v1.15 (§2, schéma v7) |
+| E34 | Tâche d'attente (cloche) : effet visuel quand le chrono atteint l'estimé | ✅ v1.16 (§2.6, schéma v8) |
+| E35 | Logo de l'application chargé en haut à gauche (PNG) | ✅ v1.16 (§2.11) |
 
 ## 2. Concepts
 
@@ -216,6 +218,14 @@ Tag Git | https://git.example.com/app/-/tags/v{{version}}
   (`todo` ou `paused`, dans l'ordre de la liste après elle, puis depuis le début) démarre, sauf si
   un autre chrono tourne déjà dans la livraison. Côté serveur (`Database._start_next`), dans la même
   transaction ; l'interface déplie la tâche démarrée et la fait défiler à l'écran.
+- **Tâche d'attente (cloche)** (v1.16, colonne `alarm`) : bouton cloche dans l'en-tête de la tâche
+  d'une livraison, sur la ligne du modèle, et case « Tâche d'attente » dans l'éditeur ; copiée du
+  modèle dans chaque nouvelle livraison. Quand une tâche d'attente **en cours** atteint son temps
+  estimé (> 0) : la tâche pulse en rouge, sa cloche s'agite, un bandeau fixe « Attente terminée : … »
+  apparaît en haut (lien vers la tâche, bouton « J'ai vu ») et le titre de l'onglet clignote
+  (« ⏰ Attente terminée »). « J'ai vu » arrête l'effet pour cette tâche et cet estimé (mémorisé
+  dans le navigateur) ; pause, validation ou retrait de la cloche l'arrêtent aussi. Avec
+  « réduire les animations » du système, effet fixe (bordure et fond rouges) sans clignotement.
 
 ### 2.7 Livraison clôturée (lecture seule)
 
@@ -263,6 +273,17 @@ livraison sont la copie figée du modèle à sa création et font partie de son 
 - **Automatique** : au démarrage, fichiers inutilisés depuis plus d'un jour et orphelins supprimés ;
   compactage si l'espace libre dépasse 25 % du fichier et 10 Mo (message « Base compactée »).
   `PRAGMA journal_size_limit` (8 Mo) empêche le journal de rester gros après un envoi de vidéo.
+
+### 2.11 Logo de l'application (v1.16)
+
+- Encart en haut à gauche de la barre latérale : « + Logo (PNG) » tant qu'il n'y en a pas ; clic
+  ou glisser-déposer d'une image. Une fois chargé, le logo remplace l'encart (hauteur 64 px max,
+  proportions gardées) ; clic pour le changer, « × » au survol pour le retirer. Il sert aussi
+  d'icône de l'onglet du navigateur.
+- PNG ou JPEG (les autres formats d'image sont convertis en PNG par le navigateur), 2 Mo maximum,
+  contenu vérifié côté serveur. Stocké dans `settings` (`logo` en base64, `logo_mime`,
+  `logo_updated` = empreinte servant à l'URL `/api/logo?v=…` pour le cache) : pas de changement de
+  schéma pour le logo.
 
 ### 2.9 Progression
 
@@ -313,16 +334,18 @@ Choix :
   cette adresse est ajoutée aux hôtes autorisés.
 - Variables d'environnement : `DELIVERY_PORT`, `DELIVERY_HOST`, `DELIVERY_DATA`, `DELIVERY_NO_LAUNCH`.
 
-### 3.1 Schéma (version 7)
+### 3.1 Schéma (version 8)
 
-- `settings(key, value)` — `schema_version`, `default_variables` (JSON), `app_title`.
+- `settings(key, value)` — `schema_version`, `default_variables` (JSON), `app_title`, `auto_timer`,
+  `logo`, `logo_mime`, `logo_updated`.
 - `template_tasks(id, position, title, description, blocks JSON, estimated_minutes, created_at,
-  updated_at, enabled)` (`enabled` : 1 = copiée dans les nouvelles livraisons, v7) + colonnes historiques inutilisées : `command`, `table_spec`, `commands`,
+  updated_at, enabled, alarm)` (`enabled` : 1 = copiée dans les nouvelles livraisons, v7 ;
+  `alarm` : tâche d'attente, v8) + colonnes historiques inutilisées : `command`, `table_spec`, `commands`,
   `link_tables`, `weight`.
 - `deliveries(id, version, name, variables JSON, status, created_at, completed_at)`
 - `delivery_tasks(id, delivery_id→deliveries, template_task_id→template_tasks, position, title,
   description, blocks JSON, estimated_minutes, status, elapsed_seconds, running_since, started_at,
-  completed_at)` + mêmes colonnes historiques.
+  completed_at, alarm)` + mêmes colonnes historiques.
 - `comments(id, delivery_task_id, body, created_at)`
 - `images(id, delivery_task_id, filename, mime, size, data BLOB, created_at, reference)` — captures
   prises pendant la livraison (`reference` historique, toujours 0 depuis v5).
@@ -356,6 +379,7 @@ Historique :
   écrit puis renommé avant que la ligne pointe dessus), puis vide `data` ; le compactage automatique
   rend ensuite la place. La sauvegarde `.bak` garde l'ancienne base avec ses vidéos.
 - v6 → v7 : colonne `template_tasks.enabled` (1 par défaut : toutes les tâches restent activées).
+- v7 → v8 : colonne `alarm` (0 par défaut) sur `template_tasks` et `delivery_tasks`.
 
 Pour toute évolution qui touche la base :
 
@@ -385,6 +409,7 @@ Toute requête qui modifie quelque chose doit porter `X-Checklist: 1` (§2.4).
 | Méthode | Route | Rôle |
 |---------|-------|------|
 | GET/PUT | `/api/settings` | `default_variables`, `app_title`, `auto_timer` (PUT partiel : seules les clés envoyées changent) ; GET ajoute `app_version`, `schema_version` |
+| GET/PUT/DELETE | `/api/logo` | logo de l'application (PUT : image brute PNG/JPEG, 2 Mo) ; PUT et DELETE renvoient les réglages |
 | GET | `/api/storage` | tailles (base, journal, dossier `media`), contenu, espace récupérable, sauvegardes (§2.10) |
 | POST | `/api/storage/cleanup` | ménage + compactage ; `delete_backups` ; renvoie le nouvel état et `result` |
 | GET/POST | `/api/tasks` | modèle : liste / ajout (`{title, description, estimated_minutes, blocks}`) |
@@ -483,3 +508,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.13** — Chronos enchaînés (E31), désactivables dans « Application ».
 - **v1.14** — Vidéos dans `data/media/` (E32), envoi en flux jusqu'à 2 Go, schéma v6.
 - **v1.15** — Tâches du modèle activables / désactivables (E33), schéma v7.
+- **v1.16** — Tâches d'attente avec alerte visuelle (E34), logo de l'application (E35), schéma v8.
