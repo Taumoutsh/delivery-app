@@ -43,7 +43,7 @@
 
   const settings = {
     default_variables: { prev_version: '', registry: 'registry.local', env: 'recette' },
-    app_title: 'Checklist Livraison', auto_timer: true, app_version: 'démo', schema_version: 5,
+    app_title: 'Checklist Livraison', auto_timer: true, logo: null, app_version: 'démo', schema_version: 5,
   };
   // Mirror of Database._start_next: chain the timers unless one is already running.
   const startNext = (d, after, now) => {
@@ -104,12 +104,13 @@
     id: i + 1, position: i, title, description, estimated_minutes,
     blocks: blocks.map((b) => ({ id: `b${nextId()}`, ...b })),
     enabled: true,
+    alarm: [3, 5].includes(i), // waiting tasks: build and deployment
   }));
 
   // Copies, not links: a delivery keeps its own blocks and media.
   const fromTemplate = (t, extra) => ({
     id: nextId(), template_task_id: t.id, title: t.title, description: t.description,
-    estimated_minutes: t.estimated_minutes, blocks: clone(t.blocks || []), status: 'todo', elapsed_seconds: 0,
+    estimated_minutes: t.estimated_minutes, blocks: clone(t.blocks || []), alarm: Boolean(t.alarm), status: 'todo', elapsed_seconds: 0,
     running_since: null, started_at: null, completed_at: null, comments: [], images: [], ...extra,
   });
 
@@ -186,12 +187,15 @@
       estimated_minutes: Math.max(0, Number(data.estimated_minutes) || 0),
       blocks: clone(data.blocks || []),
       enabled: data.enabled !== false,
+      alarm: Boolean(data.alarm),
     };
   };
   const ok = (v) => new Promise((r) => setTimeout(() => r(v), 60));
 
   const api = {
     getSettings: () => ok(clone(settings)),
+    setLogo: async (file) => { settings.logo = await readDataUrl(file); return ok(clone(settings)); },
+    deleteLogo: () => { settings.logo = null; return ok(clone(settings)); },
     getStorage: () => ok(demoStorage()),
     cleanupStorage: (deleteBackups) => {
       const before = demoStorage();

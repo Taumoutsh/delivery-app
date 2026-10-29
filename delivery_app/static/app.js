@@ -13,6 +13,7 @@
     ['prev_version', 'version précédente (pré-remplie automatiquement)'],
   ];
   const ICONS = {
+    bell: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M8 2.2a3.8 3.8 0 00-3.8 3.8v2.6L3 10.8h10l-1.2-2.2V6A3.8 3.8 0 008 2.2z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M6.4 12.6a1.7 1.7 0 003.2 0" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
     play: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M4.5 2.8v10.4L13 8z" fill="currentColor"/></svg>',
     pause: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M4 3h3v10H4zM9 3h3v10H9z" fill="currentColor"/></svg>',
     check: '<svg viewBox="0 0 16 16" class="ic" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -239,9 +240,12 @@
     document.querySelector('.main')?.scrollTo(0, 0);
   }
 
+  const DEFAULT_ICON = document.querySelector('link[rel="icon"]')?.href;
   function applySettings(settings) {
     state.settings = settings;
     document.title = settings.app_title;
+    const icon = document.querySelector('link[rel="icon"]');
+    if (icon) icon.href = settings.logo || DEFAULT_ICON;
   }
 
   async function openTemplate() {
@@ -279,6 +283,15 @@
       </button>`).join('');
     return `
       <aside class="side">
+        <div class="logo-slot${state.settings.logo ? ' has-logo' : ''}" data-logo-drop>
+          ${state.settings.logo
+            ? `<button class="logo-img" data-act="logo-pick" title="Changer le logo (cliquer ou déposer une image PNG)">
+                 <img src="${esc(state.settings.logo)}" alt="Logo de l'application"></button>
+               <button class="logo-del" data-act="logo-remove" aria-label="Retirer le logo" title="Retirer le logo">×</button>`
+            : `<button class="logo-add" data-act="logo-pick" title="Charger le logo de l'application (cliquer ou déposer une image PNG)">
+                 ${ICONS.plus}<span>Logo (PNG)</span></button>`}
+          <input type="file" accept="image/png,image/jpeg" hidden data-logo-input>
+        </div>
         <button class="brand" data-act="app-settings" title="Renommer l'application, voir sa version">
           <span class="brand-mark">${ICONS.check}</span><span class="brand-name">${esc(state.settings.app_title)}</span>
           <span class="brand-edit">${ICONS.pencil}</span></button>
@@ -714,6 +727,10 @@
               ${t.images.length ? `<span class="badge">${t.images.length} capture${t.images.length > 1 ? 's' : ''}</span>` : ''}
             </span>
           </div>
+          ${closed && !t.alarm ? '' : `<button class="bell${t.alarm ? ' on' : ''}" data-act="bell" data-id="${t.id}" ${closed ? 'disabled' : ''}
+              aria-pressed="${Boolean(t.alarm)}" aria-label="Tâche d'attente"
+              title="${t.alarm ? `Tâche d'attente : alerte quand le chrono atteint ${est ? fmtDur(est * 60) : 'le temps estimé (à définir)'}. Cliquer pour retirer.`
+                : 'Marquer comme tâche d\'attente : alerte visuelle quand le chrono atteint le temps estimé'}">${ICONS.bell}</button>`}
           <span class="timer" data-timer="${t.id}" title="Temps passé / estimé"></span>
           <div class="task-actions">
             ${primary}${validate}
@@ -748,7 +765,11 @@
           <div class="tpl-blocks">${t.blocks.length ? t.blocks.map((b) => `<span class="tpl-blk" title="${esc(Blocks.get(b.type).label)}">${Blocks.get(b.type).icon}<span>${esc(Blocks.get(b.type).summary(b))}</span></span>`).join('')
             : '<i class="muted">Aucun élément</i>'}</div>
         </div>
-        <div class="tpl-nums num"><span>${t.estimated_minutes ? fmtDur(t.estimated_minutes * 60) : '—'}</span></div>
+        <div class="tpl-nums num">
+          <button class="bell${t.alarm ? ' on' : ''}" data-act="tpl-bell" data-id="${t.id}" aria-pressed="${Boolean(t.alarm)}" aria-label="Tâche d'attente"
+            title="${t.alarm ? 'Tâche d\'attente : alerte quand le chrono atteint le temps estimé. Cliquer pour retirer.'
+              : 'Marquer comme tâche d\'attente (alerte quand le chrono atteint le temps estimé)'}">${ICONS.bell}</button>
+          <span>${t.estimated_minutes ? fmtDur(t.estimated_minutes * 60) : '—'}</span></div>
         <div class="tpl-btns">
           <button class="btn icon ghost" data-act="tpl-move" data-dir="-1" data-id="${t.id}" aria-label="Monter" ${i === 0 ? 'disabled' : ''}>${ICONS.up}</button>
           <button class="btn icon ghost" data-act="tpl-move" data-dir="1" data-id="${t.id}" aria-label="Descendre" ${i === tasks.length - 1 ? 'disabled' : ''}>${ICONS.down}</button>
@@ -801,6 +822,44 @@
     }
     const tot = document.querySelector('[data-total-spent]');
     if (tot) tot.textContent = fmtDur(total);
+    alarms(d);
+  }
+
+  // -- waiting tasks ("cloche"): when a running timer reaches the estimate, the task pulses, its bell
+  // rings, a banner shows up and the tab title blinks, until "J'ai vu" (remembered per task and estimate).
+  const ackKey = (t) => `${t.id}:${t.estimated_minutes}`;
+  const acked = new Set((() => { try { return JSON.parse(store.get('acked-alarms') || '[]'); } catch { return []; } })());
+  let blink = false;
+
+  function ringing(d) {
+    return (d?.status === 'done' ? [] : d?.tasks || []).filter((t) => t.alarm && t.status === 'running'
+      && t.estimated_minutes > 0 && elapsed(t) >= t.estimated_minutes * 60 && !acked.has(ackKey(t)));
+  }
+
+  function alarms(d) {
+    const list = state.view === 'delivery' ? ringing(d) : [];
+    document.querySelectorAll('article.task').forEach((a) => {
+      a.classList.toggle('alarming', list.some((t) => String(t.id) === a.dataset.taskId));
+    });
+    let banner = document.querySelector('.alarm-banner');
+    if (!list.length) {
+      banner?.remove();
+      if (blink) { document.title = state.settings.app_title; blink = false; }
+      return;
+    }
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.className = 'alarm-banner';
+      banner.setAttribute('role', 'alert');
+      document.body.appendChild(banner);
+    }
+    const vars = buildVariables(d);
+    const html = `<span class="alarm-bell">${ICONS.bell}</span>
+      <span>Attente terminée : ${list.map((t) => `<a href="#" data-act="alarm-goto" data-id="${t.id}">${d.tasks.indexOf(t) + 1}. ${esc(renderText(t.title, vars))}</a>`).join(', ')}</span>
+      <button class="btn sm" data-act="alarm-ack">J'ai vu</button>`;
+    if (banner.dataset.html !== html) { banner.innerHTML = html; banner.dataset.html = html; }
+    blink = true;
+    document.title = document.title.startsWith('⏰') ? state.settings.app_title : `⏰ Attente terminée — ${state.settings.app_title}`;
   }
   setInterval(tick, 1000);
 
@@ -902,6 +961,9 @@
           <label class="bf"><span class="bf-label">Temps estimé (minutes)</span>
             <input type="number" id="f-est" name="estimated_minutes" min="0" step="1" value="${t.estimated_minutes ?? 10}">
             <span class="hint">Sert aussi à la progression.</span></label>
+          <label class="bf wide3 field-check"><input type="checkbox" name="alarm"${t.alarm ? ' checked' : ''}>
+            <span><b>${ICONS.bell} Tâche d'attente</b><span class="hint">Quand son chrono atteint le temps estimé, la tâche clignote
+            et un bandeau s'affiche pour attirer l'attention (attente d'un déploiement, d'une validation…).</span></span></label>
           <label class="bf wide3"><span class="bf-label">Description</span>
             <textarea id="f-desc" name="description" rows="2" placeholder="Ce qu'il faut faire et vérifier.">${esc(t.description)}</textarea></label>
         </div>
@@ -929,6 +991,7 @@
           title: f.title.value.trim(),
           description: f.description.value,
           estimated_minutes: Number(f.estimated_minutes.value) || 0,
+          alarm: f.alarm.checked,
           blocks,
         }, f);
       },
@@ -1540,6 +1603,32 @@
         },
       });
     },
+    async bell(el) {
+      const t = state.delivery.tasks.find((x) => x.id === Number(el.dataset.id));
+      await setDelivery(await run(API.updateDeliveryTask(t.id, { alarm: !t.alarm })));
+      if (!t.alarm && !t.estimated_minutes) toast('Tâche d\'attente : définissez un temps estimé pour recevoir l\'alerte.');
+    },
+    async 'tpl-bell'(el) {
+      const t = state.templateTasks.find((x) => x.id === Number(el.dataset.id));
+      Object.assign(t, await run(API.updateTask(t.id, { alarm: !t.alarm })));
+      render();
+    },
+    'alarm-ack': () => {
+      for (const t of ringing(state.delivery)) acked.add(ackKey(t));
+      store.set('acked-alarms', JSON.stringify([...acked].slice(-200)));
+      tick();
+    },
+    'alarm-goto': (el) => {
+      const id = Number(el.dataset.id);
+      state.collapsed.delete(id);
+      render();
+      document.querySelector(`article[data-task-id="${id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    },
+    'logo-pick': () => document.querySelector('[data-logo-input]')?.click(),
+    async 'logo-remove'() {
+      applySettings(await run(API.deleteLogo(), 'Logo retiré'));
+      render();
+    },
     async 'tpl-toggle'(el) {
       const t = state.templateTasks.find((x) => x.id === Number(el.dataset.id));
       const updated = await run(API.updateTask(t.id, { enabled: t.enabled === false }));
@@ -1600,7 +1689,27 @@
     }
   });
 
+  // Application logo: file picker or an image dropped on the logo box (other formats become PNG).
+  async function setLogo(file) {
+    if (!file || !file.type.startsWith('image/')) { toast('Choisissez une image PNG.', true); return; }
+    const prepared = ['image/png', 'image/jpeg'].includes(file.type) ? file : await toPngOrJpeg(file);
+    applySettings(await run(API.setLogo(prepared), 'Logo enregistré'));
+    render();
+  }
+  document.addEventListener('dragover', (e) => {
+    if (e.target.closest?.('[data-logo-drop]')) { e.preventDefault(); e.target.closest('[data-logo-drop]').classList.add('drop'); }
+  });
+  document.addEventListener('dragleave', (e) => e.target.closest?.('[data-logo-drop]')?.classList.remove('drop'));
+  document.addEventListener('drop', (e) => {
+    const slot = e.target.closest?.('[data-logo-drop]');
+    if (!slot) return;
+    e.preventDefault();
+    slot.classList.remove('drop');
+    setLogo(e.dataTransfer.files[0]).catch(() => {});
+  });
+
   document.addEventListener('change', (e) => {
+    if (e.target.matches('[data-logo-input]')) { setLogo(e.target.files[0]).catch(() => {}); return; }
     const target = e.target.dataset?.upload;
     if (target) {
       const [scope, id] = target.split(':');

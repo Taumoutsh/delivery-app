@@ -41,6 +41,8 @@ def populate(db):
     if "enabled" in db.list_template_tasks()[0]:  # schema v7+: a disabled template task
         disabled = db.create_template_task({"title": "Tâche désactivée", "estimated_minutes": 2})
         db.update_template_task(disabled["id"], {"enabled": False})
+    if "alarm" in db.list_template_tasks()[0]:  # schema v8+: a waiting task ("cloche")
+        db.create_template_task({"title": "Attendre la fin du déploiement", "estimated_minutes": 15, "alarm": True})
     closed = db.create_delivery({"version": "1.0.0", "name": "Ancienne livraison",
                                  "variables": {"prev_version": "0.9.0", "env": "prod"}})
     for t in closed["tasks"]:
