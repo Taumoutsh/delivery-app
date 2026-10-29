@@ -3,6 +3,11 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.16.1 — 2026-10-29
+
+- Correctif : dans la fenêtre de modification d'une tâche, la case « Tâche d'attente » est de nouveau
+  à gauche de son libellé (elle s'affichait au-dessus).
+
 ## 1.16.0 — 2026-10-29
 
 - **Tâche d'attente (cloche)** : un bouton cloche sur chaque tâche (dans la livraison, dans le
