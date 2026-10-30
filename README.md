@@ -19,7 +19,14 @@ Le serveur démarre sur http://localhost:8765 et ouvre le navigateur. La base es
 qu'il faut sauvegarder.
 
 Options : `--port 9000`, `--data /chemin/vers/dossier`, `--no-browser`, `--no-launch` (désactive
-le lancement de programmes) — ou variables `DELIVERY_PORT`, `DELIVERY_DATA`, `DELIVERY_NO_LAUNCH=1`.
+le lancement de programmes), `--config FICHIER` — ou variables `DELIVERY_PORT`, `DELIVERY_DATA`,
+`DELIVERY_NO_LAUNCH=1` — ou un fichier `checklist-livraison.ini` à côté de l'app (`port`, `data`,
+`navigateur`, `programmes`). Priorité : ligne de commande, variables, fichier, valeurs par défaut.
+
+**Deux instances en parallèle** : chacune avec son port et son dossier de données, par exemple
+`python checklist-livraison.pyz --port 8766 --data data-recette` (ou `--config recette.ini`). Un
+dossier de données est verrouillé par l'instance qui l'utilise : une seconde instance sur le même
+dossier refuse de démarrer.
 
 ## Fichier unique
 

@@ -36,7 +36,26 @@ Prérequis : Python 3.8 ou plus récent. Aucune autre dépendance, aucun accès 
 3. Le navigateur s'ouvre sur http://localhost:8765. La base est créée dans `data/` à côté du fichier
    (`data/delivery.db`, et les vidéos dans `data/media/`). Pour sauvegarder, copier tout le dossier `data/`.
 
-Options : `--port 9000`, `--data CHEMIN`, `--no-browser`, `--version`.
+Options : `--port 9000`, `--data CHEMIN`, `--no-browser`, `--config FICHIER`, `--version`, ou le
+fichier `checklist-livraison.ini` à côté du `.pyz` (exemple fourni, tout est en commentaire).
+
+## Plusieurs instances en parallèle
+
+Chaque instance a **son port** et **son dossier de données** (deux instances ne peuvent pas partager
+le même dossier : la seconde refuse de démarrer et le dit).
+
+- En ligne de commande :
+  `python checklist-livraison.pyz --port 8766 --data data-recette`
+- Ou avec un fichier par instance, par exemple `recette.ini` :
+  ```
+  port = 8766
+  data = data-recette
+  ```
+  puis `python checklist-livraison.pyz --config recette.ini`.
+- Ou un dossier par instance, chacun avec son `.pyz` et son `checklist-livraison.ini`.
+
+Le port et le dossier de chaque instance s'affichent en bas de la barre latérale et dans la fenêtre
+« Application ». Si un port est déjà pris, l'application le dit et propose un port libre.
 
 ## Mise à jour
 
@@ -54,6 +73,22 @@ Comparer l'empreinte SHA-256 avec `SHA256SUMS.txt` :
 - Windows : `certutil -hashfile checklist-livraison.pyz SHA256`
 - Linux/macOS : `sha256sum checklist-livraison.pyz`
 - Partout : `python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" checklist-livraison.pyz`
+"""
+
+CONFIG_EXAMPLE = """# Configuration de la checklist de livraison (lue au démarrage, à côté du .pyz).
+# Retirez le # devant une ligne pour l'activer. La ligne de commande reste prioritaire.
+
+# Port d'écoute (une instance par port) :
+# port = 8765
+
+# Dossier de la base et des vidéos (relatif à ce fichier, ou chemin complet) :
+# data = data
+
+# Ouvrir le navigateur au démarrage (oui / non) :
+# navigateur = oui
+
+# Autoriser les éléments « Programme » à lancer des programmes (oui / non) :
+# programmes = oui
 """
 
 LANCER_BAT = """@echo off
@@ -98,6 +133,7 @@ def main():
         z.writestr(f"{base}/INSTALLATION.md", INSTALL.format(v=__version__))
         z.writestr(f"{base}/CHANGELOG.md", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
         z.writestr(f"{base}/lancer.bat", LANCER_BAT.replace("\n", "\r\n"))
+        z.writestr(f"{base}/checklist-livraison.ini", CONFIG_EXAMPLE.replace("\n", "\r\n"))
         info = zipfile.ZipInfo(f"{base}/lancer.sh")
         info.external_attr = 0o100755 << 16
         info.date_time = time.localtime()[:6]

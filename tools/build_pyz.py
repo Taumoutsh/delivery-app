@@ -12,10 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 MAIN = '''import sys
 from delivery_app.__main__ import main
-if "--no-browser" in sys.argv:
-    sys.argv.remove("--no-browser")
-elif "--open" not in sys.argv:
-    sys.argv.append("--open")
+sys.argv.append("--auto-open")  # opens the browser unless --no-browser or "navigateur = non"
 main()
 '''
 

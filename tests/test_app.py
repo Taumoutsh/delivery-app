@@ -8,6 +8,7 @@ import json
 import os
 import random
 import re
+import socket
 import sqlite3
 import struct
 import tempfile
@@ -24,6 +25,7 @@ from pathlib import Path
 from unittest import mock
 
 from delivery_app import db as dbmod
+from delivery_app import __main__ as launcher_main
 from delivery_app import pdf_writer, report
 from delivery_app.db import Database, SchemaTooNew
 from delivery_app.server import make_server
@@ -175,6 +177,10 @@ class ApiTest(unittest.TestCase):
             self.assertNotIn("running", status(d))
         finally:
             self.call("PUT", "/api/settings", {"auto_timer": True})
+
+    def test_settings_show_the_instance(self):
+        _, settings = self.call("GET", "/api/settings")
+        self.assertEqual(settings["instance"]["port"], self.server.server_address[1])
 
     def test_storage_api(self):
         status, report = self.call("GET", "/api/storage")
@@ -582,6 +588,70 @@ class StorageTest(unittest.TestCase):
         self.assertEqual(result["result"]["backups"], 1)
         self.assertFalse(backup.exists())
         self.assertEqual(result["backups"], [])
+
+
+class InstancesTest(unittest.TestCase):
+    """Port and data folder per instance: command line > DELIVERY_* > checklist-livraison.ini > defaults."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def opts(self, argv=(), env=None):
+        return launcher_main.load_options(list(argv), env or {}, self.home)
+
+    def test_defaults_config_file_env_and_command_line(self):
+        o = self.opts()
+        self.assertEqual((o.port, o.data, o.open, o.no_launch, o.config), (8765, self.home.resolve() / "data", False, False, None))
+        self.assertTrue(self.opts(["--auto-open"]).open)  # the launchers open the browser by default
+        (self.home / "checklist-livraison.ini").write_text(
+            "# deuxième instance\nport = 8766\ndata = data-recette\nnavigateur = non\nprogrammes = non\n", encoding="utf-8")
+        o = self.opts(["--auto-open"])
+        self.assertEqual((o.port, o.data, o.open, o.no_launch), (8766, (self.home / "data-recette").resolve(), False, True))
+        self.assertEqual(self.opts(env={"DELIVERY_PORT": "8770"}).port, 8770)
+        self.assertEqual(self.opts(["--port", "8780"], env={"DELIVERY_PORT": "8770"}).port, 8780)
+        self.assertTrue(self.opts(["--open"]).open)
+        # Another file for another instance, with a [checklist] section.
+        other = self.home / "prod.ini"
+        other.write_text("[checklist]\nport = 8790\ndata = /tmp/ailleurs\n", encoding="utf-8")
+        o = self.opts(["--config", str(other)])
+        self.assertEqual((o.port, str(o.data)), (8790, str(Path("/tmp/ailleurs").resolve())))
+
+    def test_clear_errors(self):
+        for content, expected in (("port = huit", "nombre"), ("navigateur = peut-être", "oui ou non"),
+                                  ("couleur = bleu", "option inconnue"), ("port = 70000", "invalide")):
+            (self.home / "checklist-livraison.ini").write_text(content, encoding="utf-8")
+            with self.assertRaises(launcher_main.ConfigError) as ctx:
+                self.opts()
+            self.assertIn(expected, str(ctx.exception))
+        with self.assertRaises(launcher_main.ConfigError):
+            self.opts(["--config", str(self.home / "absent.ini")])
+
+    def test_busy_port_suggests_a_free_one(self):
+        with socket.socket() as busy:
+            busy.bind(("127.0.0.1", 0))
+            port = busy.getsockname()[1]
+            self.assertFalse(launcher_main.port_is_free("127.0.0.1", port))
+            message = launcher_main.busy_port_message("127.0.0.1", port)
+            suggested = int(re.search(r"--port (\d+)", message).group(1))
+            self.assertNotEqual(suggested, port)
+            self.assertTrue(launcher_main.port_is_free("127.0.0.1", suggested))
+
+    def test_a_data_folder_serves_one_instance(self):
+        first = launcher_main.lock_data_dir(self.home, {"url": "http://localhost:8765/"})
+        try:
+            with self.assertRaises(launcher_main.DataFolderInUse) as ctx:
+                launcher_main.lock_data_dir(self.home, {"url": "http://localhost:8766/"})
+            self.assertIn("http://localhost:8765/", str(ctx.exception))
+            other = self.home / "autre"
+            other.mkdir()
+            launcher_main.lock_data_dir(other, {"url": "http://localhost:8766/"}).close()  # another folder: fine
+        finally:
+            first.close()
+        launcher_main.lock_data_dir(self.home, {"url": "http://localhost:8767/"}).close()  # free again
 
 
 class VideoFolderTest(unittest.TestCase):
