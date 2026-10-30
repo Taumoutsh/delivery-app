@@ -11,8 +11,5 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from delivery_app.__main__ import main  # noqa: E402
 
 if __name__ == "__main__":
-    if "--no-browser" in sys.argv:
-        sys.argv.remove("--no-browser")
-    elif "--open" not in sys.argv:
-        sys.argv.append("--open")
+    sys.argv.append("--auto-open")  # opens the browser unless --no-browser or "navigateur = non"
     main()

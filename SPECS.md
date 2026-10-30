@@ -44,6 +44,7 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E33 | Activer / désactiver des tâches du modèle (toutes activées par défaut) | ✅ v1.15 (§2, schéma v7) |
 | E34 | Tâche d'attente (cloche) : effet visuel quand le chrono atteint l'estimé | ✅ v1.16 (§2.6, schéma v8) |
 | E35 | Logo de l'application chargé en haut à gauche (PNG) | ✅ v1.16 (§2.11) |
+| E36 | Choisir le port, lancer deux instances en parallèle | ✅ v1.17 (`--port`, `checklist-livraison.ini`, verrou du dossier de données) |
 
 ## 2. Concepts
 
@@ -333,6 +334,19 @@ Choix :
 - **Écoute sur 127.0.0.1** par défaut (usage local, pas d'authentification). Avec `--host <ip>`,
   cette adresse est ajoutée aux hôtes autorisés.
 - Variables d'environnement : `DELIVERY_PORT`, `DELIVERY_HOST`, `DELIVERY_DATA`, `DELIVERY_NO_LAUNCH`.
+- **Configuration et instances** (v1.17) : options par ordre de priorité : ligne de commande,
+  variables `DELIVERY_*`, fichier `checklist-livraison.ini` à côté de l'app (ou `--config FICHIER` :
+  `port`, `data` relatif au fichier, `navigateur`, `programmes`, `host` ; section `[checklist]`
+  facultative ; option inconnue ou valeur invalide = refus de démarrer avec un message), valeurs
+  par défaut. Plusieurs instances tournent en parallèle, chacune avec **son port et son dossier de
+  données** :
+  - le port est vérifié avant de toucher aux données ; s'il est pris, message avec un port libre
+    proposé (sous Windows, `SO_REUSEADDR` est désactivé pour qu'un port pris ne soit jamais partagé) ;
+  - le dossier de données est verrouillé par l'instance (`data/.instance.lock`, verrou système
+    libéré à l'arrêt, même brutal) ; une seconde instance sur le même dossier refuse de démarrer en
+    nommant l'adresse de la première ;
+  - le port et le dossier s'affichent en bas de la barre latérale et dans la fenêtre « Application »
+    (`instance` dans `GET /api/settings`).
 
 ### 3.1 Schéma (version 8)
 
@@ -510,3 +524,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.15** — Tâches du modèle activables / désactivables (E33), schéma v7.
 - **v1.16** — Tâches d'attente avec alerte visuelle (E34), logo de l'application (E35), schéma v8.
 - **v1.16.1** — Correctif : case « Tâche d'attente » alignée avec son libellé dans l'éditeur.
+- **v1.17** — Fichier de configuration, instances en parallèle (port et dossier de données propres, verrou) (E36).

@@ -303,7 +303,8 @@
         <div class="side-label">Historique des livraisons</div>
         <div class="history">${items || '<div class="side-empty">Aucune livraison pour le moment.</div>'}</div>
         <button class="side-foot num" data-act="app-settings" title="À propos de l'application">
-          Version ${esc(state.settings.app_version)} · base v${esc(state.settings.schema_version)}</button>
+          Version ${esc(state.settings.app_version)} · base v${esc(state.settings.schema_version)}${state.settings.instance?.port
+            ? ` · port ${esc(state.settings.instance.port)}` : ''}</button>
       </aside>`;
   }
 
@@ -1434,6 +1435,8 @@
           <dl class="about">
             <dt>Version</dt><dd class="num">${esc(st.app_version)}</dd>
             <dt>Format de la base</dt><dd class="num">v${esc(st.schema_version)}</dd>
+            ${st.instance?.url ? `<dt>Adresse</dt><dd class="num">${esc(st.instance.url)}</dd>` : ''}
+            ${st.instance?.data ? `<dt>Données</dt><dd class="num path">${esc(st.instance.data)}</dd>` : ''}
           </dl>
           <section class="storage" data-storage><h3>Stockage</h3><p class="muted">Calcul de la taille…</p></section>`,
         async onSubmit(form) {

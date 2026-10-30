@@ -3,6 +3,19 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.17.0 — 2026-10-30
+
+- **Plusieurs instances en parallèle** : chacune avec son port et son dossier de données, par
+  exemple `python checklist-livraison.pyz --port 8766 --data data-recette`.
+- **Fichier de configuration** `checklist-livraison.ini` à côté de l'app (`port`, `data`,
+  `navigateur`, `programmes`), pratique quand on lance l'app par un double-clic ; `--config FICHIER`
+  pour un fichier par instance. Un exemple commenté est fourni dans la release.
+- Sécurité des données : deux instances ne peuvent plus utiliser le même dossier de données ; la
+  seconde refuse de démarrer et indique quelle instance l'utilise.
+- Port déjà pris : message clair avec un port libre proposé, sans rien créer.
+- Le port et le dossier de données s'affichent en bas de la barre latérale et dans « Application ».
+- Aucun changement de format de base.
+
 ## 1.16.1 — 2026-10-29
 
 - Correctif : dans la fenêtre de modification d'une tâche, la case « Tâche d'attente » est de nouveau

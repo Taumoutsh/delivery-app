@@ -2,6 +2,7 @@
 
 import json
 import mimetypes
+import os
 import pkgutil
 import re
 import sys
@@ -57,12 +58,12 @@ def found(value):
 
 @route("GET", "/api/settings")
 def get_settings(h):
-    return h.db.get_settings()
+    return {**h.db.get_settings(), "instance": h.instance}
 
 
 @route("PUT", "/api/settings")
 def put_settings(h):
-    return h.db.save_settings(h.json())
+    return {**h.db.save_settings(h.json()), "instance": h.instance}
 
 
 @route("GET", "/api/logo")
@@ -79,12 +80,12 @@ def put_logo(h):
     kind = image_ext(data)
     if kind not in ("png", "jpeg"):
         raise HttpError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Le logo doit être une image PNG (ou JPEG).")
-    return h.db.set_logo(f"image/{kind}", data)
+    return {**h.db.set_logo(f"image/{kind}", data), "instance": h.instance}
 
 
 @route("DELETE", "/api/logo")
 def delete_logo(h):
-    return h.db.set_logo(None, None)
+    return {**h.db.set_logo(None, None), "instance": h.instance}
 
 
 @route("GET", "/api/storage")
@@ -298,6 +299,7 @@ def delete_image(h, image_id):
 class Handler(BaseHTTPRequestHandler):
     db = None  # injected by make_server
     allow_launch = True
+    instance = {}
     allowed_hosts = frozenset()
     server_version = f"DeliveryChecklist/{__version__}"
 
@@ -460,10 +462,19 @@ class Handler(BaseHTTPRequestHandler):
         self.dispatch("DELETE")
 
 
-def make_server(db, host, port, allow_launch=True):
+class _Server(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second server take a port already in use: two instances on
+    # the same port would then silently share it.
+    allow_reuse_address = os.name != "nt"
+
+
+def make_server(db, host, port, allow_launch=True, instance=None):
+    """instance: {"url", "port", "data"} shown in the app, to tell side-by-side instances apart."""
     hosts = {"localhost", "127.0.0.1", "::1"}
     if host not in ("0.0.0.0", "::", ""):
         hosts.add(host.lower())
     handler = type("BoundHandler", (Handler,), {
         "db": db, "allow_launch": allow_launch, "allowed_hosts": frozenset(hosts)})
-    return ThreadingHTTPServer((host, port), handler)
+    server = _Server((host, port), handler)
+    handler.instance = instance or {"url": None, "port": server.server_address[1], "data": None}
+    return server

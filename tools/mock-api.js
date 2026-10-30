@@ -43,7 +43,8 @@
 
   const settings = {
     default_variables: { prev_version: '', registry: 'registry.local', env: 'recette' },
-    app_title: 'Checklist Livraison', auto_timer: true, logo: null, app_version: 'démo', schema_version: 5,
+    app_title: 'Checklist Livraison', auto_timer: true, logo: null,
+    instance: { url: 'http://localhost:8765/', port: 8765, data: 'C:\\outils\\checklist\\data' }, app_version: 'démo', schema_version: 5,
   };
   // Mirror of Database._start_next: chain the timers unless one is already running.
   const startNext = (d, after, now) => {

@@ -514,3 +514,4 @@ textarea[data-rich] { tab-size: 4; }
   .task.alarming, .alarm-banner, .task.alarming .bell, .alarm-banner .alarm-bell { animation: none; }
   .task.alarming { box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 35%, transparent); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
 }
+.about dd.path { overflow-wrap: anywhere; font-size: 12px; }
