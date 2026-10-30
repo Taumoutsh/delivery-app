@@ -4,6 +4,8 @@ Task content blocks are rendered by DOCX_RENDERERS / PDF_RENDERERS (one function
 see blocks.py); a type without renderer is simply left out of the reports.
 """
 
+import re
+import unicodedata
 from datetime import datetime, timezone
 
 from . import __version__
@@ -54,6 +56,21 @@ def _summary(delivery):
     return variables, info
 
 
+def report_filename(app_title, version, ext):
+    """« <nom de l'app>_<version de la livraison>.<ext> » : nom en minuscules sans accents, mots séparés
+    par « _ » (Checklist Livraison, 2.4.0 → checklist_livraison_2.4.0.pdf)."""
+    plain = unicodedata.normalize("NFKD", app_title).encode("ascii", "ignore").decode("ascii").lower()
+    name = re.sub(r"[^a-z0-9]+", "_", plain).strip("_") or "livraison"
+    safe_version = re.sub(r"[^\w.-]+", "_", version).strip("_.") or "version"
+    return f"{name}_{safe_version}.{ext}"
+
+
+def _logo(db):
+    """Logo bytes for the reports, or None."""
+    logo = db.get_logo()
+    return logo[1] if logo else None
+
+
 def _app_label(db):
     """« <titre de l'application> <version> », shown on every report."""
     return f"{db.app_title()} {__version__}"
@@ -77,6 +94,9 @@ def build_docx(delivery, db):
     variables, info = _summary(delivery)
     app = _app_label(db)
     doc = Docx(f"Livraison {delivery['version']}", creator=app)
+    logo = _logo(db)
+    if logo:
+        doc.image(logo, "logo", max_width_cm=6, max_height_cm=1.8)
     doc.paragraph(doc.run(app, color="55606E", size=9))
     doc.heading(f"Rapport de livraison — {delivery['version']}", 0)
     if delivery["name"]:
@@ -297,6 +317,13 @@ def build_pdf(delivery, db):
     variables, info = _summary(delivery)
     app = _app_label(db)
     doc = pdf.Pdf(title=f"Livraison {delivery['version']}", footer=f"{app} · Rapport de livraison {delivery['version']}")
+    logo = _logo(db)
+    if logo:
+        try:
+            doc.image(logo, max_width=170, max_height=50, border=False)
+            doc.space(4)
+        except Exception:  # a PNG the writer cannot read (interlaced, 16 bits…): the report goes without it
+            pass
     doc.text(app, size=8.5, color=pdf.MUTED, after=2)
     doc.text(f"Rapport de livraison — {delivery['version']}", pdf.BOLD, 20, after=4)
     if delivery["name"]:

@@ -212,6 +212,33 @@ class ApiTest(unittest.TestCase):
         finally:
             self.call("PUT", f"/api/tasks/{target['id']}", {"alarm": False, "estimated_minutes": target["estimated_minutes"]})
 
+    def test_report_file_name_and_logo(self):
+        self.assertEqual(report.report_filename("Le Titre", "1.0", "pdf"), "le_titre_1.0.pdf")
+        self.assertEqual(report.report_filename("Checklist Livraison", "2.4.0-rc1", "docx"), "checklist_livraison_2.4.0-rc1.docx")
+        self.assertEqual(report.report_filename("  Déploiement — Équipe API !", "v3 beta/2", "pdf"),
+                         "deploiement_equipe_api_v3_beta_2.pdf")
+        self.assertEqual(report.report_filename("★★", "1.0", "pdf"), "livraison_1.0.pdf")
+
+        _, d = self.call("POST", "/api/deliveries", {"version": "12.1.0"})
+        self.call("PUT", "/api/settings", {"app_title": "Mon Appli Déploiement"})
+        try:
+            req = urllib.request.Request(f"{self.base}/api/deliveries/{d['id']}/report.pdf")
+            with urllib.request.urlopen(req) as res:
+                self.assertIn("filename*=UTF-8''mon_appli_deploiement_12.1.0.pdf", res.headers["Content-Disposition"])
+                without_logo = res.read()
+            logo, _ = make_png(120, 30, 4)  # wide, with transparency
+            self.assertEqual(self.call("PUT", "/api/logo", raw=logo, headers={"Content-Type": "image/png"})[0], 200)
+            _, with_logo = self.call("GET", f"/api/deliveries/{d['id']}/report.pdf")
+            self.assertGreater(with_logo.count(b"/Subtype /Image"), without_logo.count(b"/Subtype /Image"))  # + alpha mask
+            _, docx = self.call("GET", f"/api/deliveries/{d['id']}/report.docx")
+            names = zipfile.ZipFile(io.BytesIO(docx)).namelist()
+            self.assertIn("word/media/image1.png", names)
+            first = zipfile.ZipFile(io.BytesIO(docx)).read("word/document.xml").decode()
+            self.assertLess(first.index("<w:drawing>"), first.index("Rapport de livraison"))  # logo at the top
+        finally:
+            self.call("DELETE", "/api/logo")
+            self.call("PUT", "/api/settings", {"app_title": ""})
+
     def test_logo(self):
         _, settings = self.call("GET", "/api/settings")
         self.assertIsNone(settings["logo"])

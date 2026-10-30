@@ -167,8 +167,7 @@ def export_report(h, delivery_id, fmt):
     delivery = found(h.db.get_delivery(int(delivery_id)))
     data = report.build_pdf(delivery, h.db) if fmt == "pdf" else report.build_docx(delivery, h.db)
     mime = "application/pdf" if fmt == "pdf" else DOCX_MIME
-    safe = re.sub(r"[^\w.-]+", "_", delivery["version"])
-    h.send_bytes(data, mime, f"livraison_{safe}.{fmt}", attachment=True)
+    h.send_bytes(data, mime, report.report_filename(h.db.app_title(), delivery["version"], fmt), attachment=True)
 
 
 @route("GET", r"/api/delivery-tasks/(\d+)/tables?\.docx")

@@ -3,6 +3,17 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.18.0 — 2026-10-30
+
+- **Logo dans les rapports** : le logo de l'application (encart en haut à gauche) apparaît en tête
+  des rapports PDF et Word.
+- **Nom des fichiers** : nom de l'application en minuscules, mots séparés par « _ », suivi de la
+  version de la livraison : « Le Titre », livraison 1.0 → `le_titre_1.0.pdf` et `le_titre_1.0.docx`
+  (accents et caractères spéciaux retirés).
+- Le logo chargé est réenregistré en PNG standard (taille limitée) pour être intégrable partout ;
+  rechargez-le une fois si celui déjà en place n'apparaît pas dans le PDF.
+- Aucun changement de format de base.
+
 ## 1.17.0 — 2026-10-30
 
 - **Plusieurs instances en parallèle** : chacune avec son port et son dossier de données, par
