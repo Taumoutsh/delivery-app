@@ -45,6 +45,7 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E34 | Tâche d'attente (cloche) : effet visuel quand le chrono atteint l'estimé | ✅ v1.16 (§2.6, schéma v8) |
 | E35 | Logo de l'application chargé en haut à gauche (PNG) | ✅ v1.16 (§2.11) |
 | E36 | Choisir le port, lancer deux instances en parallèle | ✅ v1.17 (`--port`, `checklist-livraison.ini`, verrou du dossier de données) |
+| E37 | Logo dans les rapports ; fichiers nommés `<nom_de_l_app>_<version>.pdf/.docx` | ✅ v1.18 (§5) |
 
 ## 2. Concepts
 
@@ -281,7 +282,9 @@ livraison sont la copie figée du modèle à sa création et font partie de son 
   ou glisser-déposer d'une image. Une fois chargé, le logo remplace l'encart (hauteur 64 px max,
   proportions gardées) ; clic pour le changer, « × » au survol pour le retirer. Il sert aussi
   d'icône de l'onglet du navigateur.
-- PNG ou JPEG (les autres formats d'image sont convertis en PNG par le navigateur), 2 Mo maximum,
+- Repris en tête des rapports PDF et Word (v1.18, §5).
+- PNG ou JPEG, réencodé par le navigateur en PNG standard (8 bits, non entrelacé, 1200 px de côté
+  maximum) pour que les rapports PDF puissent l'intégrer ; 2 Mo maximum,
   contenu vérifié côté serveur. Stocké dans `settings` (`logo` en base64, `logo_mime`,
   `logo_updated` = empreinte servant à l'URL `/api/logo?v=…` pour le cache) : pas de changement de
   schéma pour le logo.
@@ -472,10 +475,17 @@ Les mutations d'une livraison renvoient la livraison complète (l'UI se re-rend 
 
 ## 5. Rapport (PDF / Word)
 
-« <nom de l'application> <version> », titre, statut, dates, progression, compteurs, temps passé/estimé, variables ; tableau de synthèse
+Logo de l'application en tête de la première page (s'il y en a un, §2.11 ; PDF : 170 × 50 pt max, sans
+cadre, transparence gardée ; Word : 6 × 1,8 cm max ; un PNG illisible par le générateur PDF est
+simplement omis), « <nom de l'application> <version> », titre, statut, dates, progression, compteurs, temps passé/estimé, variables ; tableau de synthèse
 (tâche, statut, estimé, passé) ; détail par tâche : méta (statut, temps, dates), description,
 éléments dans leur ordre avec variables **résolues** (rendu par type, §2.2), commentaires
 horodatés, captures de la livraison.
+
+**Nom du fichier** (v1.18) : `<nom de l'application>_<version de la livraison>.pdf|.docx` — nom en
+minuscules, accents retirés, tout ce qui n'est ni lettre ni chiffre remplacé par `_`
+(« Le Titre », livraison 1.0 → `le_titre_1.0.pdf` ; « Checklist Livraison », 2.4.0 →
+`checklist_livraison_2.4.0.docx`). `report.report_filename`, envoyé dans `Content-Disposition`.
 
 ## 6. Pistes d'évolution
 
@@ -525,3 +535,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.16** — Tâches d'attente avec alerte visuelle (E34), logo de l'application (E35), schéma v8.
 - **v1.16.1** — Correctif : case « Tâche d'attente » alignée avec son libellé dans l'éditeur.
 - **v1.17** — Fichier de configuration, instances en parallèle (port et dossier de données propres, verrou) (E36).
+- **v1.18** — Logo en tête des rapports, nom des fichiers d'après l'application et la version (E37).

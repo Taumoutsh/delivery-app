@@ -367,7 +367,7 @@ class Pdf:
             draw(cells, height, False, i)
         self.y -= 8
 
-    def image(self, data, max_width=None, max_height=300, cache_key=None):
+    def image(self, data, max_width=None, max_height=300, cache_key=None, border=True):
         img = _IMAGE_CACHE.get(cache_key) if cache_key is not None else None
         if img is None:
             if data[:8] == b"\x89PNG\r\n\x1a\n":
@@ -386,7 +386,8 @@ class Pdf:
         w, h = width * scale, height * scale
         self.images.append(img)
         self.ensure(h + 4)
-        self._rect(MARGIN - 0.5, self.y - h - 0.5, w + 1, h + 1, stroke=LINE)
+        if border:
+            self._rect(MARGIN - 0.5, self.y - h - 0.5, w + 1, h + 1, stroke=LINE)
         self.page["ops"].append(f"q {w:.2f} 0 0 {h:.2f} {MARGIN:.2f} {self.y - h:.2f} cm /Im{len(self.images)} Do Q")
         self.y -= h + 4
 

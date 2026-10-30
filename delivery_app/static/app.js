@@ -1244,8 +1244,9 @@
     : new File([file], file.name, { type: VIDEO_EXT[extOf(file)] }));
 
   // Reports embed PNG/JPEG only: other formats (GIF, WebP, BMP…) are converted to PNG in the browser.
-  async function toPngOrJpeg(file) {
-    if (file.type === 'image/png' || file.type === 'image/jpeg') return file;
+  // maxSide: also re-encode PNG/JPEG, scaled down to fit (the logo: a plain 8-bit PNG the PDF reports can embed).
+  async function toPngOrJpeg(file, maxSide = 0) {
+    if (!maxSide && (file.type === 'image/png' || file.type === 'image/jpeg')) return file;
     const url = URL.createObjectURL(file);
     try {
       const img = await new Promise((resolve, reject) => {
@@ -1254,10 +1255,11 @@
         i.onerror = () => reject(new Error(`Image illisible : ${file.name}`));
         i.src = url;
       });
+      const scale = maxSide ? Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight)) : 1;
       const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      canvas.getContext('2d').drawImage(img, 0, 0);
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
       const name = (file.name || 'capture').replace(/\.[^.]+$/, '') + '.png';
       return new File([blob], name, { type: 'image/png' });
@@ -1695,8 +1697,7 @@
   // Application logo: file picker or an image dropped on the logo box (other formats become PNG).
   async function setLogo(file) {
     if (!file || !file.type.startsWith('image/')) { toast('Choisissez une image PNG.', true); return; }
-    const prepared = ['image/png', 'image/jpeg'].includes(file.type) ? file : await toPngOrJpeg(file);
-    applySettings(await run(API.setLogo(prepared), 'Logo enregistré'));
+    applySettings(await run(API.setLogo(await toPngOrJpeg(file, 1200)), 'Logo enregistré'));
     render();
   }
   document.addEventListener('dragover', (e) => {
