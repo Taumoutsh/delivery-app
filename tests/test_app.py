@@ -667,6 +667,21 @@ class InstancesTest(unittest.TestCase):
             self.assertNotEqual(suggested, port)
             self.assertTrue(launcher_main.port_is_free("127.0.0.1", suggested))
 
+    def test_port_of_a_stopped_instance_is_free_at_once(self):
+        """Restarting right after stopping: the port is in TIME_WAIT, the server can reuse it."""
+        server = launcher_main.socket.socket()
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        port = server.getsockname()[1]
+        client = socket.create_connection(("127.0.0.1", port))
+        conn, _ = server.accept()
+        self.assertFalse(launcher_main.port_is_free("127.0.0.1", port))  # still listening
+        conn.close()  # the server side closes first: its end goes to TIME_WAIT
+        server.close()
+        client.close()
+        self.assertTrue(launcher_main.port_is_free("127.0.0.1", port))
+
     def test_a_data_folder_serves_one_instance(self):
         first = launcher_main.lock_data_dir(self.home, {"url": "http://localhost:8765/"})
         try:
