@@ -3,6 +3,14 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.18.1 — 2026-11-02
+
+- Correctif : une ligne de commande trop longue ne passe plus sous le bouton « Copier ». Le bouton a
+  sa propre place à droite ; la commande défile horizontalement dans sa zone, jusqu'au bouton.
+- Correctif (1.17) : relancer l'application juste après l'avoir arrêtée affichait parfois « port
+  déjà utilisé » pendant environ une minute (Linux). Le port d'une instance arrêtée est de nouveau
+  réutilisable tout de suite ; un port réellement occupé est toujours détecté.
+
 ## 1.18.0 — 2026-10-30
 
 - **Logo dans les rapports** : le logo de l'application (encart en haut à gauche) apparaît en tête

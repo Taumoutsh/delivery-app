@@ -136,7 +136,11 @@ def load_options(argv=None, env=None, home=None):
 
 
 def port_is_free(host, port):
+    """Whether the server could listen on the port: same socket options as the server, so a port left
+    in TIME_WAIT by an instance just stopped counts as free (Linux), but one still listening does not."""
     with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as sock:
+        if os.name != "nt":
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((host, port))
             return True
