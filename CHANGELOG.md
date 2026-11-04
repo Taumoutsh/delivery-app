@@ -3,6 +3,14 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.18.2 — 2026-11-04
+
+- Correctif : la console n'affiche plus d'erreur `WinError 10053` (`socketserver.py … sendall`) quand
+  le navigateur interrompt un envoi en cours : avance dans une vidéo, visionneuse fermée,
+  téléchargement annulé, page rechargée. Ce n'était pas une panne (rien n'était perdu) ; le serveur
+  ne tente plus non plus de répondre sur une connexion déjà fermée. Les vraies erreurs restent
+  affichées.
+
 ## 1.18.1 — 2026-11-02
 
 - Correctif : une ligne de commande trop longue ne passe plus sous le bouton « Copier ». Le bouton a

@@ -3,6 +3,7 @@
 Run: python -m unittest discover tests
 """
 
+import contextlib
 import io
 import json
 import os
@@ -181,6 +182,26 @@ class ApiTest(unittest.TestCase):
     def test_settings_show_the_instance(self):
         _, settings = self.call("GET", "/api/settings")
         self.assertEqual(settings["instance"]["port"], self.server.server_address[1])
+
+    def test_client_closing_mid_download_is_not_an_error(self):
+        """A browser that stops reading (video seek, viewer closed, download cancelled) closes the
+        connection while the server is still writing: WinError 10053 on Windows, a reset or broken
+        pipe elsewhere. Nothing to report, and no attempt to answer on the closed connection."""
+        video = os.urandom(8_000_000)
+        _, clip = self.upload("/api/media", video, "video/mp4", "long.mp4")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            for _ in range(3):
+                sock = socket.create_connection(("127.0.0.1", self.server.server_address[1]))
+                sock.sendall(f"GET {clip['url']} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".encode())
+                sock.recv(4096)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))  # abort (RST)
+                sock.close()
+            time.sleep(0.5)
+        self.assertNotIn("Traceback", err.getvalue())
+        self.assertNotIn("Exception", err.getvalue())
+        with urllib.request.urlopen(self.base + clip["url"]) as res:  # the server keeps serving
+            self.assertEqual(len(res.read()), len(video))
 
     def test_storage_api(self):
         status, report = self.call("GET", "/api/storage")

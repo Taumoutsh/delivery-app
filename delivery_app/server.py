@@ -34,6 +34,10 @@ CSRF_HEADER = "X-Checklist"
 ROUTES = []
 
 
+# A browser that stops reading closes the connection under our feet: not an error of the app.
+CLIENT_GONE = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)
+
+
 def route(method, pattern):
     def register(fn):
         ROUTES.append((method, re.compile(f"^{pattern}$"), fn))
@@ -422,6 +426,10 @@ class Handler(BaseHTTPRequestHandler):
             if method != "GET":
                 raise HttpError(HTTPStatus.METHOD_NOT_ALLOWED, "Méthode non autorisée.")
             self.serve_static(path)
+        except CLIENT_GONE:
+            # The browser closed the connection while we were writing (video seek, viewer closed,
+            # download cancelled; WinError 10053 on Windows): nothing to report, nobody to answer.
+            self.close_connection = True
         except HttpError as exc:
             self.send_json({"error": exc.message}, exc.status)
         except DeliveryClosed as exc:
@@ -465,6 +473,12 @@ class _Server(ThreadingHTTPServer):
     # On Windows SO_REUSEADDR lets a second server take a port already in use: two instances on
     # the same port would then silently share it.
     allow_reuse_address = os.name != "nt"
+
+    def handle_error(self, request, client_address):
+        """Stay quiet when the browser went away (also while the response is flushed); report the rest."""
+        if isinstance(sys.exc_info()[1], CLIENT_GONE):
+            return
+        super().handle_error(request, client_address)
 
 
 def make_server(db, host, port, allow_launch=True, instance=None):

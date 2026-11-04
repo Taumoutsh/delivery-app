@@ -537,3 +537,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.17** — Fichier de configuration, instances en parallèle (port et dossier de données propres, verrou) (E36).
 - **v1.18** — Logo en tête des rapports, nom des fichiers d'après l'application et la version (E37).
 - **v1.18.1** — Correctifs : commande longue qui passait sous « Copier » ; relance immédiate refusée (port en TIME_WAIT).
+- **v1.18.2** — Correctif : connexion fermée par le navigateur pendant un envoi (WinError 10053) traitée sans erreur ni trace.
