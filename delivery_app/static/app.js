@@ -1058,6 +1058,17 @@
         card.remove();
         sync();
         counts();
+      } else if (action === 'link-add' || action === 'link-remove') {
+        sync();
+        const b = ed.blocks.find((x) => x.id === card.dataset.card);
+        if (action === 'link-add') b.links.push({ label: '', url: '' });
+        else b.links.splice(Number(btn.dataset.index), 1);
+        if (!b.links.length) b.links.push({ label: '', url: '' });
+        refresh();
+        if (action === 'link-add') {
+          const rows = list.querySelector(`[data-card="${CSS.escape(b.id)}"]`)?.querySelectorAll('[data-link-row]');
+          rows?.[rows.length - 1]?.querySelector('input')?.focus();
+        }
       } else if (action === 'fmt') {
         applyFormat(card.querySelector('textarea[data-rich]'), btn.dataset.fmt);
       } else if (action === 'media-add') {
@@ -1311,10 +1322,11 @@
       toast(`Copie automatique refusée. Texte : ${text}`);
       return;
     }
-    const label = btn.textContent;
-    btn.textContent = 'Copié ✓';
+    if (btn.classList.contains('copied')) return;
+    const content = btn.innerHTML; // may be an icon
+    btn.textContent = btn.classList.contains('icon') ? '✓' : 'Copié ✓';
     btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = label; btn.classList.remove('copied'); }, 1500);
+    setTimeout(() => { btn.innerHTML = content; btn.classList.remove('copied'); }, 1500);
   }
 
   // blockId = one table block; null = every table of the task, each preceded by its title.
@@ -1500,8 +1512,11 @@
     'blk-copy': (el) => {
       const { block } = blockOf(el);
       const vars = buildVariables(state.delivery);
-      const text = renderText(block.type === 'link' ? block.url : block.text, vars);
-      return copyText(el, text, el.closest('[data-block]').querySelector('pre, .link-chip span'));
+      if (block.type === 'link') {
+        const link = block.links.filter((l) => l.url)[Number(el.dataset.index) || 0];
+        return copyText(el, renderText(link.url, vars), el.closest('.link-item')?.querySelector('.link-chip span'));
+      }
+      return copyText(el, renderText(block.text, vars), el.closest('[data-block]').querySelector('pre'));
     },
     'blk-launch': async (el) => {
       const { task, block } = blockOf(el);

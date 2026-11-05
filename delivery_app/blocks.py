@@ -8,7 +8,8 @@ an entry here, one in static/blocks.js, and its rendering in report.py (BLOCK_RE
 import re
 import secrets
 
-# type -> (text fields, required field). "media" also carries a "files" list.
+# type -> (text fields, required field). "media" also carries a "files" list, "link" a "links" list
+# (its label/url fields mirror the first link, for older versions of the app).
 TYPES = {
     "command": (("label", "text"), "text"),
     "link": (("label", "url"), "url"),
@@ -37,6 +38,20 @@ def _clean_files(files):
     return out
 
 
+def _clean_links(raw):
+    """[{"label", "url"}] of a link block; a block from before v1.19 holds a single label/url."""
+    links = raw.get("links")
+    if not isinstance(links, list):
+        links = [{"label": raw.get("label"), "url": raw.get("url")}]
+    out = []
+    for link in links:
+        if isinstance(link, dict):
+            url = str(link.get("url") or "").strip()
+            if url:
+                out.append({"label": str(link.get("label") or "").strip(), "url": url})
+    return out
+
+
 def normalize(blocks):
     """Validated list of blocks: known types only, string fields, empty blocks dropped.
 
@@ -57,6 +72,10 @@ def normalize(blocks):
             block[name] = value if name in _RAW else value.strip()
         if kind == "media":
             block["files"] = _clean_files(raw.get("files"))
+        if kind == "link":
+            block["links"] = _clean_links(raw)
+            first = block["links"][0] if block["links"] else {"label": "", "url": ""}
+            block["label"], block["url"] = first["label"], first["url"]
         if (block["files"] if kind == "media" else block[required].strip()):
             out.append(block)
     return out
@@ -64,6 +83,8 @@ def normalize(blocks):
 
 def texts(block):
     """Strings of a block that may contain {{variables}}."""
+    if block["type"] == "link":
+        return [v for link in block.get("links", []) for v in (link["label"], link["url"])]
     return [block.get(name, "") for name in TYPES.get(block["type"], ((), None))[0]]
 
 

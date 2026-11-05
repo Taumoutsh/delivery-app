@@ -46,6 +46,7 @@ Application web locale servant de checklist pour préparer une livraison logicie
 | E35 | Logo de l'application chargé en haut à gauche (PNG) | ✅ v1.16 (§2.11) |
 | E36 | Choisir le port, lancer deux instances en parallèle | ✅ v1.17 (`--port`, `checklist-livraison.ini`, verrou du dossier de données) |
 | E37 | Logo dans les rapports ; fichiers nommés `<nom_de_l_app>_<version>.pdf/.docx` | ✅ v1.18 (§5) |
+| E38 | Plusieurs liens dans un même élément « Lien », sur une même ligne | ✅ v1.19 (§2.2) |
 
 ## 2. Concepts
 
@@ -97,7 +98,7 @@ facultatif : une tâche peut n'avoir aucun élément. Les éléments vides sont 
 | Type | Champs | Affichage dans la livraison | Rapports |
 |------|--------|-----------------------------|----------|
 | `command` — Ligne de commande | `label`, `text` (multiligne) | bloc de code + **Copier** | libellé + code |
-| `link` — Lien | `label`, `url` | bouton au libellé (adresse au survol, nouvel onglet) + **Copier le lien** | lien cliquable |
+| `link` — Liens | `links` : liste de `{label, url}` (v1.19 ; `label`/`url` = copie du 1er lien, pour les versions antérieures) | boutons côte à côte sur une ligne (adresse au survol, nouvel onglet), chacun avec son bouton de copie | « Liens : » puis chaque lien cliquable (et son adresse) sur une ligne, séparés par « · » |
 | `program` — Programme | `name`, `path`, `args`, `cwd` | bouton **Lancer** (ligne résolue au survol) | nom + ligne de lancement |
 | `table` — Tableau pour Word | `title`, `spec` (§2.3) | tableau + **Copier pour Word** / **.docx** | tableau avec liens |
 | `media` — Images et vidéos | `title`, `files` (ids de `media`) | miniatures → visionneuse (lecture vidéo) | images intégrées ; vidéos citées par nom |
@@ -111,6 +112,12 @@ facultatif : une tâche peut n'avoir aucun élément. Les éléments vides sont 
    absent des rapports) ;
 4. si le type a besoin d'une action serveur (comme `program`), une route dédiée.
 Aucune migration de base n'est nécessaire pour un nouveau type.
+
+Élément **Liens** (v1.19) : un ou plusieurs liens, affichés sur une même ligne (retour à la ligne
+si la place manque). Éditeur : une ligne libellé + adresse par lien, « + Ajouter un lien », « × »
+pour en retirer un ; les liens sans adresse sont ignorés, un élément sans aucune adresse est
+supprimé. Un élément enregistré avant la v1.19 (`label`, `url`) devient un élément d'un seul lien
+à la lecture (`blocks.normalize`), sans migration.
 
 ### 2.3 bis Mise en forme des notes (v1.10)
 
@@ -538,3 +545,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.18** — Logo en tête des rapports, nom des fichiers d'après l'application et la version (E37).
 - **v1.18.1** — Correctifs : commande longue qui passait sous « Copier » ; relance immédiate refusée (port en TIME_WAIT).
 - **v1.18.2** — Correctif : connexion fermée par le navigateur pendant un envoi (WinError 10053) traitée sans erreur ni trace.
+- **v1.19** — Plusieurs liens par élément « Liens », côte à côte (E38). Pas de changement de schéma.

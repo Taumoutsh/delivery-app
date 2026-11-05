@@ -516,3 +516,14 @@ textarea[data-rich] { tab-size: 4; }
   .task.alarming { box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 35%, transparent); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
 }
 .about dd.path { overflow-wrap: anywhere; font-size: 12px; }
+
+/* Link block: several links side by side, each with its own copy button. */
+.link-row { gap: 6px 14px; }
+.link-item { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
+.link-copy { padding: 5px; color: var(--muted); }
+.link-copy .ic { width: 14px; height: 14px; }
+.link-rows { display: flex; flex-direction: column; gap: 6px; }
+.link-edit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; gap: 6px; align-items: center; }
+@media (max-width: 640px) { .link-edit { grid-template-columns: minmax(0, 1fr) auto; } .link-edit [data-l="url"] { grid-column: 1; } }
+.link-copy { min-width: 26px; justify-content: center; }
+.link-copy.copied { color: var(--ok); }
