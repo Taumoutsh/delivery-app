@@ -3,6 +3,11 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.19.1 — 2026-11-05
+
+- Les notes occupent toute la largeur de la tâche, comme les commandes (elles étaient limitées à
+  environ 72 caractères de large).
+
 ## 1.19.0 — 2026-11-05
 
 - **Plusieurs liens dans un même élément** : l'élément « Liens » accepte un ou plusieurs liens

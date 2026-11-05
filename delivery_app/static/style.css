@@ -376,7 +376,7 @@ html.modal-open, html.modal-open body, html.modal-open .main { overflow: hidden;
 .link-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--accent); font-weight: 500; text-decoration: none; max-width: 100%; }
 .link-chip span { overflow-wrap: anywhere; }
 .link-chip:hover { border-color: var(--accent); background: var(--accent-soft); }
-.note-box { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--run-soft); border-radius: 6px; padding: 10px 12px; max-width: 72ch; }
+.note-box { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--run-soft); border-radius: 6px; padding: 10px 12px; }
 .note-box .var { font-weight: 600; }
 .note-box.rich p, .note-box.rich ul, .note-box.rich ol { margin: 0; }
 .note-box.rich > * + * { margin-top: 6px; }
