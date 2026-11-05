@@ -58,7 +58,7 @@
   // Block helpers (same shapes as blocks.js).
   const B = {
     command: (label, text) => ({ type: 'command', label, text }),
-    link: (label, url) => ({ type: 'link', label, url }),
+    link: (label, url, ...more) => ({ type: 'link', links: [{ label, url }, ...more.map(([l, u]) => ({ label: l, url: u }))] }),
     program: (name, path, args = '', cwd = '') => ({ type: 'program', name, path, args, cwd }),
     table: (title, spec) => ({ type: 'table', title, spec }),
     media: (title, files) => ({ type: 'media', title, files }),
@@ -77,7 +77,8 @@
     ['Lancer la suite de tests', 'Tous les tests doivent passer. Joindre une capture du rapport.', 30, [
       B.command('Tests', 'make test'),
       B.command('Qualité', 'make lint'),
-      B.link('Pipeline de la branche', 'https://ci.example.com/app/-/pipelines?ref=release/{{version}}'),
+      B.link('Pipeline de la branche', 'https://ci.example.com/app/-/pipelines?ref=release/{{version}}',
+        ['Rapport de couverture', 'https://ci.example.com/app/-/coverage/{{version}}'], ['Qualité (Sonar)', 'https://sonar.example.com/dashboard?id=app&branch=release/{{version}}']),
     ]],
     ['Construire les artefacts', "Build de l'image Docker et du paquet pour la version {{version}}.", 20, [
       B.command('Image Docker', 'docker build -t {{registry}}/app:{{version}} .\ndocker push {{registry}}/app:{{version}}'),

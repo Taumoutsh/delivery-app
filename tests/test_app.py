@@ -203,6 +203,29 @@ class ApiTest(unittest.TestCase):
         with urllib.request.urlopen(self.base + clip["url"]) as res:  # the server keeps serving
             self.assertEqual(len(res.read()), len(video))
 
+    def test_link_block_holds_several_links(self):
+        _, d = self.call("POST", "/api/deliveries", {"version": "13.0.0"})
+        _, d = self.call("POST", f"/api/deliveries/{d['id']}/tasks", {"title": "Liens", "blocks": [
+            {"type": "link", "links": [{"label": "Pipeline", "url": " https://ci/{{version}} "},
+                                       {"label": "vide", "url": "  "},  # dropped
+                                       {"label": "", "url": "https://wiki/{{version}}"}]},
+            {"type": "link", "label": "Ancien format", "url": "https://old"},  # before 1.19: converted
+            {"type": "link", "links": [{"label": "rien", "url": ""}]}]})  # no address: block dropped
+        blocks = d["tasks"][-1]["blocks"]
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(blocks[0]["links"], [{"label": "Pipeline", "url": "https://ci/{{version}}"},
+                                              {"label": "", "url": "https://wiki/{{version}}"}])
+        self.assertEqual((blocks[0]["label"], blocks[0]["url"]), ("Pipeline", "https://ci/{{version}}"))  # older apps
+        self.assertEqual(blocks[1]["links"], [{"label": "Ancien format", "url": "https://old"}])
+        _, docx = self.call("GET", f"/api/deliveries/{d['id']}/report.docx")
+        rels = zipfile.ZipFile(io.BytesIO(docx)).read("word/_rels/document.xml.rels").decode()
+        for url in ("https://ci/13.0.0", "https://wiki/13.0.0", "https://old"):
+            self.assertIn(url, rels)
+        self.assertIn(">Liens : <", zipfile.ZipFile(io.BytesIO(docx)).read("word/document.xml").decode())
+        _, pdf = self.call("GET", f"/api/deliveries/{d['id']}/report.pdf")
+        for url in (b"https://ci/13.0.0", b"https://wiki/13.0.0"):
+            self.assertIn(url, pdf)  # clickable annotations
+
     def test_storage_api(self):
         status, report = self.call("GET", "/api/storage")
         self.assertEqual(status, 200)

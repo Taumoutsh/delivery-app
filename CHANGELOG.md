@@ -3,6 +3,15 @@
 Chaque section `## X.Y.Z` sert de notes de release (lue par `tools/build_release.py`).
 La version de l'application est dans `delivery_app/__init__.py`.
 
+## 1.19.0 — 2026-11-05
+
+- **Plusieurs liens dans un même élément** : l'élément « Liens » accepte un ou plusieurs liens
+  (« + Ajouter un lien » dans l'éditeur, « × » pour en retirer un). Dans la livraison, ils
+  s'affichent côte à côte sur une même ligne, chacun avec son bouton de copie.
+- Dans les rapports PDF et Word, les liens d'un élément sont sur une même ligne, séparés par « · ».
+- Les éléments « Lien » existants deviennent des éléments d'un seul lien, sans rien perdre.
+- Aucun changement de format de base.
+
 ## 1.18.2 — 2026-11-04
 
 - Correctif : la console n'affiche plus d'erreur `WinError 10053` (`socketserver.py … sendall`) quand

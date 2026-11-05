@@ -141,11 +141,23 @@ def _docx_command(doc, b, variables, db):
     doc.code(render_command(b["text"], variables))
 
 
+def _links(b, variables):
+    """[(label, url)] of a link block, variables resolved (label = url when there is none)."""
+    out = []
+    for link in b["links"]:
+        url = render_command(link["url"], variables)
+        out.append((render_command(link["label"], variables) or url, url, bool(link["label"])))
+    return out
+
+
 def _docx_link(doc, b, variables, db):
-    url = render_command(b["url"], variables)
-    label = render_command(b["label"], variables) or url
-    doc.paragraph(doc.run("Lien : ", bold=True) + doc.link(label, url) + (doc.run(f"  ({url})", color="55606E", size=9)
-                                                                           if b["label"] else ""))
+    links = _links(b, variables)
+    runs = doc.run("Liens : " if len(links) > 1 else "Lien : ", bold=True)
+    for i, (label, url, labelled) in enumerate(links):
+        runs += (doc.run("   ·   ", color="55606E") if i else "") + doc.link(label, url)
+        if labelled:
+            runs += doc.run(f" ({url})", color="55606E", size=9)
+    doc.paragraph(runs)
 
 
 def _docx_program(doc, b, variables, db):
@@ -257,11 +269,14 @@ def _pdf_command(doc, b, variables, db):
 
 
 def _pdf_link(doc, b, variables, db):
-    url = render_command(b["url"], variables)
-    label = render_command(b["label"], variables) or url
-    segments = [("Lien : ", pdf.BOLD, pdf.INK, None), (label, pdf.REGULAR, pdf.LINK, url)]
-    if b["label"]:
-        segments.append((f"  ({url})", pdf.REGULAR, pdf.MUTED, None))
+    links = _links(b, variables)
+    segments = [("Liens : " if len(links) > 1 else "Lien : ", pdf.BOLD, pdf.INK, None)]
+    for i, (label, url, labelled) in enumerate(links):
+        if i:
+            segments.append(("   ·   ", pdf.REGULAR, pdf.MUTED, None))
+        segments.append((label, pdf.REGULAR, pdf.LINK, url))
+        if labelled:
+            segments.append((f" ({url})", pdf.REGULAR, pdf.MUTED, None))
     doc.rich(segments, size=9.5)
 
 

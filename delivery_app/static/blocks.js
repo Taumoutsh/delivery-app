@@ -25,6 +25,7 @@
     note: I('<path d="M3 2.5h10v8l-3 3H3z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M5.5 6h5M5.5 8.5h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'),
     external: I('<path d="M9 2.5h4.5V7M13.5 2.5L7.5 8.5M11.5 9.5v4h-9v-9h4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>'),
     play: I('<path d="M5 3v10l8-5z" fill="currentColor"/>'),
+    copy: I('<rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M10.5 3.5v-.5A1.5 1.5 0 009 1.5H4A1.5 1.5 0 002.5 3v5A1.5 1.5 0 004 9.5h.5" fill="none" stroke="currentColor" stroke-width="1.3"/>'),
   };
 
   // Note formatting buttons: [format, label, shortcut, glyph].
@@ -59,23 +60,34 @@
     },
 
     link: {
-      label: 'Lien',
-      hint: 'Une adresse web ou réseau ; elle peut contenir des variables.',
+      label: 'Liens',
+      hint: 'Une ou plusieurs adresses web ou réseau, affichées côte à côte ; elles peuvent contenir des variables.',
       icon: ICON.link,
-      blank: () => ({ label: '', url: '' }),
-      editor: (b, h) => field('Libellé', `<input type="text" data-f="label" value="${h.esc(b.label)}" placeholder="Pipeline de la version">`, '', false)
-        + field('Adresse', `<input type="text" data-f="url" class="mono" value="${h.esc(b.url)}" placeholder="https://ci.example.com/app/{{version}}">`),
-      read: (card) => ({ label: val(card, 'label').trim(), url: val(card, 'url').trim() }),
-      isEmpty: (b) => !b.url,
-      summary: (b) => b.label || b.url,
-      texts: (b) => [b.label, b.url],
-      view: (b, { vars, h }) => {
-        const url = h.renderText(b.url, vars);
-        return `<div class="link-row">
-          <a class="link-chip" href="${h.esc(url)}" title="${h.esc(url)}" target="_blank" rel="noopener">${ICON.external}<span>${h.esc(h.renderText(b.label, vars) || url)}</span></a>
-          <button class="btn ghost sm" data-act="blk-copy">Copier le lien</button>
-        </div>`;
-      },
+      blank: () => ({ links: [{ label: '', url: '' }] }),
+      editor: (b, h) => `<div class="bf wide"><span class="bf-label">Liens <span class="muted">(affichés sur une même ligne)</span></span>
+          <div class="link-rows" data-link-rows>${(b.links && b.links.length ? b.links : [{ label: '', url: '' }]).map((l, i) => `
+            <div class="link-edit" data-link-row>
+              <input type="text" data-l="label" value="${h.esc(l.label)}" placeholder="Libellé (ex. Pipeline)" aria-label="Libellé du lien ${i + 1}">
+              <input type="text" data-l="url" class="mono" value="${h.esc(l.url)}" placeholder="https://ci.example.com/app/{{version}}" aria-label="Adresse du lien ${i + 1}">
+              <button type="button" class="btn icon ghost" data-ed="link-remove" data-index="${i}" aria-label="Retirer ce lien" title="Retirer ce lien">×</button>
+            </div>`).join('')}</div>
+          <div><button type="button" class="btn ghost sm" data-ed="link-add">+ Ajouter un lien</button></div></div>`,
+      read: (card) => ({
+        links: [...card.querySelectorAll('[data-link-row]')].map((row) => ({
+          label: row.querySelector('[data-l="label"]').value.trim(),
+          url: row.querySelector('[data-l="url"]').value.trim(),
+        })),
+      }),
+      isEmpty: (b) => !(b.links || []).some((l) => l.url),
+      summary: (b) => (b.links || []).filter((l) => l.url).map((l) => l.label || l.url).join(' · '),
+      texts: (b) => (b.links || []).flatMap((l) => [l.label, l.url]),
+      view: (b, { vars, h }) => `<div class="link-row">${(b.links || []).filter((l) => l.url).map((l, i) => {
+        const url = h.renderText(l.url, vars);
+        return `<span class="link-item">
+            <a class="link-chip" href="${h.esc(url)}" title="${h.esc(url)}" target="_blank" rel="noopener">${ICON.external}<span>${h.esc(h.renderText(l.label, vars) || url)}</span></a>
+            <button class="btn icon ghost link-copy" data-act="blk-copy" data-index="${i}" title="Copier le lien" aria-label="Copier le lien ${h.esc(h.renderText(l.label, vars) || url)}">${ICON.copy}</button>
+          </span>`;
+      }).join('')}</div>`,
     },
 
     program: {

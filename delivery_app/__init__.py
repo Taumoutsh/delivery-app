@@ -1,3 +1,3 @@
 """Checklist de livraison."""
 
-__version__ = "1.18.2"
+__version__ = "1.19.0"
