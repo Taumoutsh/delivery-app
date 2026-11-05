@@ -546,3 +546,4 @@ section de `CHANGELOG.md`, vérifié par le workflow de release).
 - **v1.18.1** — Correctifs : commande longue qui passait sous « Copier » ; relance immédiate refusée (port en TIME_WAIT).
 - **v1.18.2** — Correctif : connexion fermée par le navigateur pendant un envoi (WinError 10053) traitée sans erreur ni trace.
 - **v1.19** — Plusieurs liens par élément « Liens », côte à côte (E38). Pas de changement de schéma.
+- **v1.19.1** — Notes sur toute la largeur de la tâche.
